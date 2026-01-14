@@ -1,0 +1,98 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+enum Channel {
+  stable
+  beta
+  hotfix
+}
+
+model Project {
+  id         String    @id @default(cuid())
+  name       String    @unique
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  licenses   License[]
+  releases   Release[]
+}
+
+model License {
+  id             String       @id @default(cuid())
+  projectId      String
+  project        Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  licenseKeyHash String       @unique
+  plan           String
+  maxActivations Int
+  durationDays   Int?
+  expiresAt      DateTime?
+  notes          String?
+  revoked        Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  activations    Activation[]
+}
+
+model Activation {
+  id           String   @id @default(cuid())
+  licenseId    String
+  license      License  @relation(fields: [licenseId], references: [id], onDelete: Cascade)
+  deviceIdHash String
+  receiptHash  String   @unique
+  revoked      Boolean  @default(false)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Release {
+  id          String    @id @default(cuid())
+  projectId   String
+  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  version     String
+  channel     Channel
+  notes       String?
+  publishedAt DateTime  @default(now())
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  asset       Asset?
+}
+
+model Asset {
+  id          String   @id @default(cuid())
+  releaseId   String   @unique
+  release     Release  @relation(fields: [releaseId], references: [id], onDelete: Cascade)
+  filename    String
+  sizeBytes   Int
+  sha256      String
+  downloadUrl String
+  storagePath String?
+  contentType String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  name         String
+  passwordHash String
+  role         String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+}
+
+model Plan {
+  id                    String   @id @default(cuid())
+  name                  String   @unique
+  allowedChannels       Json
+  maxActivationsDefault Int
+  gracePeriodDays       Int
+  durationDaysDefault   Int?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}

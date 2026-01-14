@@ -1,0 +1,15 @@
+**/node_modules
+**/dist
+**/.git
+**/.env
+**/.env.*
+**/storage
+**/coverage
+**/.cache
+**/*.log
+dashboard
+sdk-python
+sdk-rust
+infra
+docs
+README.md

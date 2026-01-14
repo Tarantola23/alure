@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "alure-sdk"
+version = "0.1.0"
+description = "Alure Python SDK for licensing and updates"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Alure" }]
+
+[tool.setuptools.packages.find]
+where = ["."]

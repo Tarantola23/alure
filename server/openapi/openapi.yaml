@@ -1,0 +1,918 @@
+openapi: 3.0.3
+info:
+  title: Alure API
+  version: 0.1.0
+servers:
+  - url: /api/v1
+tags:
+  - name: auth
+  - name: licensing
+  - name: projects
+  - name: plans
+  - name: updates
+paths:
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Login and obtain a JWT
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Login success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+  /auth/bootstrap:
+    get:
+      tags: [auth]
+      summary: Check if an administrator account exists
+      responses:
+        '200':
+          description: Bootstrap status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BootstrapStatus'
+    post:
+      tags: [auth]
+      summary: Create the initial administrator account
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BootstrapRequest'
+      responses:
+        '200':
+          description: Bootstrap success
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+  /auth/me:
+    get:
+      tags: [auth]
+      summary: Get current user profile
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+    put:
+      tags: [auth]
+      summary: Update current user profile
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProfile'
+      responses:
+        '200':
+          description: Updated profile
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserProfile'
+  /licenses/activate:
+    post:
+      tags: [licensing]
+      summary: Activate a license key and issue a signed receipt
+      security:
+        - bearerAuth: [licensing]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ActivateRequest'
+      responses:
+        '200':
+          description: Activation successful
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivateResponse'
+  /licenses/verify:
+    post:
+      tags: [licensing]
+      summary: Verify a receipt and optionally refresh it
+      security:
+        - bearerAuth: [licensing]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifyRequest'
+      responses:
+        '200':
+          description: Verification result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifyResponse'
+  /licenses/revoke:
+    post:
+      tags: [licensing]
+      summary: Revoke a license or a specific activation
+      security:
+        - bearerAuth: [licensing]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RevokeRequest'
+      responses:
+        '200':
+          description: Revoke result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevokeResponse'
+  /licenses:
+    get:
+      tags: [licensing]
+      summary: List licenses (optionally filtered by project)
+      parameters:
+        - in: query
+          name: project_id
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Licenses list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/LicenseListItem'
+    post:
+      tags: [licensing]
+      summary: Create a new license key
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateLicenseRequest'
+      responses:
+        '200':
+          description: License created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateLicenseResponse'
+  /licenses/{license_id}/activations:
+    get:
+      tags: [licensing]
+      summary: List activations for a license
+      parameters:
+        - in: path
+          name: license_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Activation list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ActivationListItem'
+  /projects:
+    get:
+      tags: [projects]
+      summary: List projects
+      responses:
+        '200':
+          description: Projects list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Project'
+    post:
+      tags: [projects]
+      summary: Create a project
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProjectRequest'
+      responses:
+        '200':
+          description: Project created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Project'
+  /projects/{project_id}:
+    delete:
+      tags: [projects]
+      summary: Delete a project (cascade deletes licenses and releases)
+      parameters:
+        - in: path
+          name: project_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Delete result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: boolean
+  /projects/{project_id}/releases:
+    get:
+      tags: [projects]
+      summary: List releases for a project
+      parameters:
+        - in: path
+          name: project_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Release list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ReleaseListItem'
+    post:
+      tags: [projects]
+      summary: Create a release for a project
+      parameters:
+        - in: path
+          name: project_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateReleaseRequest'
+      responses:
+        '200':
+          description: Release created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReleaseListItem'
+  /projects/{project_id}/releases/upload:
+    post:
+      tags: [projects]
+      summary: Upload a release asset and create the release
+      parameters:
+        - in: path
+          name: project_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file, version, channel]
+              properties:
+                file:
+                  type: string
+                  format: binary
+                version:
+                  type: string
+                channel:
+                  type: string
+                  enum: [stable, beta, hotfix]
+                notes:
+                  type: string
+      responses:
+        '200':
+          description: Release created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReleaseListItem'
+  /projects/{project_id}/releases/{release_id}:
+    get:
+      tags: [projects]
+      summary: Get release details
+      parameters:
+        - in: path
+          name: project_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: release_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Release detail
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReleaseListItem'
+  /projects/{project_id}/releases/{release_id}/promote:
+    post:
+      tags: [projects]
+      summary: Promote or rollback a release to another channel
+      parameters:
+        - in: path
+          name: project_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: release_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PromoteReleaseRequest'
+      responses:
+        '200':
+          description: Release promoted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReleaseListItem'
+  /plans:
+    get:
+      tags: [plans]
+      summary: List plans
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Plans list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Plan'
+    post:
+      tags: [plans]
+      summary: Create a plan
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreatePlan'
+      responses:
+        '200':
+          description: Plan created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plan'
+  /plans/{plan_id}:
+    put:
+      tags: [plans]
+      summary: Update a plan
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: plan_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdatePlan'
+      responses:
+        '200':
+          description: Plan updated
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Plan'
+    delete:
+      tags: [plans]
+      summary: Delete a plan
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: plan_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Delete result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: boolean
+  /updates/latest:
+    get:
+      tags: [updates]
+      summary: Check latest release for a project/channel
+      parameters:
+        - in: query
+          name: project_id
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: channel
+          required: true
+          schema:
+            type: string
+            enum: [stable, beta, hotfix]
+        - in: query
+          name: current_version
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Latest update info
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LatestUpdateResponse'
+  /updates/download-token:
+    post:
+      tags: [updates]
+      summary: Issue a short-lived download token using a valid receipt
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/DownloadTokenRequest'
+      responses:
+        '200':
+          description: Download token
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DownloadTokenResponse'
+  /updates/download/{asset_id}:
+    get:
+      tags: [updates]
+      summary: Download a release asset
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: asset_id
+          required: true
+          schema:
+            type: string
+        - in: query
+          name: token
+          required: false
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Asset binary
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    ActivateRequest:
+      type: object
+      required: [license_key, device_id]
+      properties:
+        license_key:
+          type: string
+        device_id:
+          type: string
+        app_version:
+          type: string
+        device_meta:
+          type: object
+          additionalProperties: true
+    ActivateResponse:
+      type: object
+      required: [receipt, activation_id, grace_period_days, server_time]
+      properties:
+        receipt:
+          type: string
+          description: Signed receipt token
+        activation_id:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        grace_period_days:
+          type: integer
+        server_time:
+          type: string
+          format: date-time
+    VerifyRequest:
+      type: object
+      required: [receipt, device_id]
+      properties:
+        receipt:
+          type: string
+        device_id:
+          type: string
+    VerifyResponse:
+      type: object
+      required: [valid, server_time]
+      properties:
+        valid:
+          type: boolean
+        reason:
+          type: string
+        new_receipt:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        server_time:
+          type: string
+          format: date-time
+    RevokeRequest:
+      type: object
+      properties:
+        license_id:
+          type: string
+        activation_id:
+          type: string
+        reason:
+          type: string
+      description: Provide license_id or activation_id
+    RevokeResponse:
+      type: object
+      required: [revoked]
+      properties:
+        revoked:
+          type: boolean
+        server_time:
+          type: string
+          format: date-time
+    CreateLicenseRequest:
+      type: object
+      required: [project_id, plan, max_activations]
+      properties:
+        project_id:
+          type: string
+        plan:
+          type: string
+        max_activations:
+          type: integer
+          minimum: 0
+        duration_days:
+          type: integer
+        notes:
+          type: string
+    CreateLicenseResponse:
+      type: object
+      required: [license_id, license_key]
+      properties:
+        license_id:
+          type: string
+        license_key:
+          type: string
+    LicenseListItem:
+      type: object
+      required: [license_id, project_id, plan, max_activations, revoked, created_at]
+      properties:
+        license_id:
+          type: string
+        project_id:
+          type: string
+        plan:
+          type: string
+        max_activations:
+          type: integer
+          minimum: 0
+        revoked:
+          type: boolean
+        duration_days:
+          type: integer
+        notes:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
+    ActivationListItem:
+      type: object
+      required: [activation_id, device_id_hash, revoked, created_at]
+      properties:
+        activation_id:
+          type: string
+        device_id_hash:
+          type: string
+        revoked:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+    CreateProjectRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+    Project:
+      type: object
+      required: [id, name, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreateReleaseRequest:
+      type: object
+      required: [version, channel]
+      properties:
+        version:
+          type: string
+        channel:
+          type: string
+          enum: [stable, beta, hotfix]
+        notes:
+          type: string
+        asset:
+          type: object
+          required: [filename, size_bytes, sha256]
+          properties:
+            filename:
+              type: string
+            size_bytes:
+              type: integer
+            sha256:
+              type: string
+    PromoteReleaseRequest:
+      type: object
+      required: [channel]
+      properties:
+        channel:
+          type: string
+          enum: [stable, beta, hotfix]
+    ReleaseListItem:
+      type: object
+      required: [id, version, channel, published_at]
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        channel:
+          type: string
+          enum: [stable, beta, hotfix]
+        notes:
+          type: string
+        published_at:
+          type: string
+          format: date-time
+        asset:
+          type: object
+          required: [id, filename, size_bytes, sha256, download_url]
+          properties:
+            id:
+              type: string
+            filename:
+              type: string
+            size_bytes:
+              type: integer
+            sha256:
+              type: string
+            download_url:
+              type: string
+    LatestUpdateResponse:
+      type: object
+      required: [update_available, server_time]
+      properties:
+        update_available:
+          type: boolean
+        latest_version:
+          type: string
+        release_notes:
+          type: string
+        release:
+          $ref: '#/components/schemas/Release'
+        asset:
+          $ref: '#/components/schemas/Asset'
+        server_time:
+          type: string
+          format: date-time
+    DownloadTokenRequest:
+      type: object
+      required: [receipt, device_id, asset_id]
+      properties:
+        receipt:
+          type: string
+        device_id:
+          type: string
+        asset_id:
+          type: string
+    DownloadTokenResponse:
+      type: object
+      required: [token, expires_at]
+      properties:
+        token:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
+    Release:
+      type: object
+      required: [release_id, version, channel]
+      properties:
+        release_id:
+          type: string
+        version:
+          type: string
+        channel:
+          type: string
+          enum: [stable, beta, hotfix]
+        published_at:
+          type: string
+          format: date-time
+    Asset:
+      type: object
+      required: [asset_id, filename, size_bytes, sha256]
+      properties:
+        asset_id:
+          type: string
+        filename:
+          type: string
+        size_bytes:
+          type: integer
+          format: int64
+        sha256:
+          type: string
+        download_url:
+          type: string
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+    LoginResponse:
+      type: object
+      required: [token, user]
+      properties:
+        token:
+          type: string
+        user:
+          $ref: '#/components/schemas/UserProfile'
+    UserProfile:
+      type: object
+      required: [id, email, name, role]
+      properties:
+        id:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+    UpdateProfile:
+      type: object
+      properties:
+        name:
+          type: string
+        email:
+          type: string
+        password:
+          type: string
+    BootstrapStatus:
+      type: object
+      required: [has_admin]
+      properties:
+        has_admin:
+          type: boolean
+    BootstrapRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email:
+          type: string
+        name:
+          type: string
+        password:
+          type: string
+    Plan:
+      type: object
+      required: [id, name, allowed_channels, max_activations_default, grace_period_days, created_at, updated_at]
+      properties:
+        id:
+          type: string
+        name:
+          type: string
+        allowed_channels:
+          type: array
+          items:
+            type: string
+        max_activations_default:
+          type: integer
+          minimum: 0
+        grace_period_days:
+          type: integer
+        duration_days_default:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+    CreatePlan:
+      type: object
+      required: [name, allowed_channels, max_activations_default, grace_period_days]
+      properties:
+        name:
+          type: string
+        allowed_channels:
+          type: array
+          items:
+            type: string
+        max_activations_default:
+          type: integer
+          minimum: 0
+        grace_period_days:
+          type: integer
+        duration_days_default:
+          type: integer
+    UpdatePlan:
+      type: object
+      properties:
+        name:
+          type: string
+        allowed_channels:
+          type: array
+          items:
+            type: string
+        max_activations_default:
+          type: integer
+          minimum: 0
+        grace_period_days:
+          type: integer
+        duration_days_default:
+          type: integer
