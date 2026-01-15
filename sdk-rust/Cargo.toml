@@ -1,0 +1,22 @@
+[package]
+name = "alure-sdk"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+base64 = "0.21"
+chrono = { version = "0.4", features = ["clock", "serde"] }
+dirs = "5"
+ed25519-dalek = { version = "2", features = ["pkcs8"] }
+hostname = "0.3"
+mac_address = "1"
+pkcs8 = { version = "0.10", features = ["pem"] }
+reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+thiserror = "1"
+tokio = { version = "1", features = ["fs", "io-util", "macros", "rt-multi-thread", "time"] }
+urlencoding = "2"
+uuid = { version = "1", features = ["v5"] }
+whoami = "1"
