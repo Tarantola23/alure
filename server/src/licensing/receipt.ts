@@ -28,8 +28,9 @@ const fromBase64Url = (value: string): Buffer => {
 const loadKeyPair = () => {
   const envKey = process.env.RECEIPT_PRIVATE_KEY;
   if (envKey) {
-    const privateKey = envKey.includes('BEGIN')
-      ? createPrivateKey(envKey)
+    const normalizedKey = envKey.includes('\\n') ? envKey.replace(/\\n/g, '\n') : envKey;
+    const privateKey = normalizedKey.includes('BEGIN')
+      ? createPrivateKey(normalizedKey)
       : createPrivateKey({ key: Buffer.from(envKey, 'base64'), format: 'der', type: 'pkcs8' });
     return {
       privateKey,

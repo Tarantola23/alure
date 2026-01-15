@@ -16,6 +16,54 @@
   margin-top: 24px;
 }
 
+.project-shell {
+  display: grid;
+  gap: 16px;
+}
+
+.project-mobile-header {
+  display: none;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(26, 20, 36, 0.96);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: var(--shadow-soft);
+}
+
+.project-mobile-header h2 {
+  margin: 4px 0 0;
+  font-size: 18px;
+}
+
+button.hamburger {
+  display: grid;
+  gap: 4px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+button.hamburger span {
+  display: block;
+  width: 18px;
+  height: 2px;
+  background: #ffe6b1;
+  border-radius: 999px;
+}
+
+.sidebar-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(8, 6, 14, 0.6);
+  border: none;
+  padding: 0;
+  margin: 0;
+  z-index: 20;
+}
+
 .section-header {
   display: grid;
   gap: 8px;
@@ -703,7 +751,26 @@ button:disabled {
   }
 
   .sidebar {
-    position: static;
+    position: fixed;
+    top: 120px;
+    left: 16px;
+    right: 16px;
+    max-width: 320px;
+    transform: translateX(-120%);
+    opacity: 0;
+    pointer-events: none;
+    transition: transform 0.2s ease, opacity 0.2s ease;
+    z-index: 30;
+  }
+
+  .sidebar.open {
+    transform: translateX(0);
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .project-mobile-header {
+    display: flex;
   }
 
   .grid {

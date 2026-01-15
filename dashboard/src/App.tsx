@@ -532,6 +532,7 @@ function ProjectLayout() {
   const [licenseCount, setLicenseCount] = useState(0)
   const [releaseCount, setReleaseCount] = useState(0)
   const [activationCount, setActivationCount] = useState(0)
+  const [sidebarOpen, setSidebarOpen] = useState(false)
 
   useEffect(() => {
     if (!projectId) return
@@ -562,13 +563,42 @@ function ProjectLayout() {
     void loadCounts()
   }, [projectId])
 
+  useEffect(() => {
+    setSidebarOpen(false)
+  }, [projectId])
+
   if (!projectId) {
     return null
   }
 
   return (
-    <div className="project-layout">
-      <aside className="sidebar">
+    <div className="project-shell">
+      <div className="project-mobile-header">
+        <button
+          className="hamburger"
+          type="button"
+          onClick={() => setSidebarOpen((prev) => !prev)}
+          aria-label="Toggle project menu"
+        >
+          <span />
+          <span />
+          <span />
+        </button>
+        <div>
+          <span className="sidebar-title">Project</span>
+          <h2>{project?.name ?? projectId}</h2>
+        </div>
+      </div>
+      {sidebarOpen && (
+        <button
+          className="sidebar-backdrop"
+          type="button"
+          aria-label="Close project menu"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+      <div className="project-layout">
+        <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div className="sidebar-header">
           <span className="sidebar-title">Project</span>
           <h2>{project?.name ?? projectId}</h2>
@@ -595,6 +625,7 @@ function ProjectLayout() {
       <main className="content">
         <Outlet />
       </main>
+      </div>
     </div>
   )
 }

@@ -1,5 +1,4 @@
 import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
-import { Channel } from '@prisma/client';
 import { createHash } from 'crypto';
 import { createReadStream } from 'fs';
 import { stat } from 'fs/promises';
@@ -12,6 +11,7 @@ import {
   ReleaseListItemDto,
 } from './projects.types';
 import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
+import type { $Enums } from '@prisma/client';
 type UploadedReleaseFile = {
   path: string;
   originalname: string;
@@ -109,7 +109,7 @@ export class ProjectsService {
       data: {
         projectId,
         version: body.version,
-        channel: body.channel as Channel,
+        channel: body.channel as $Enums.Channel,
         notes: body.notes ?? null,
         asset: body.asset
           ? {
@@ -124,18 +124,14 @@ export class ProjectsService {
             }
           : undefined,
       },
+      include: { asset: true },
     });
 
-    if (body.asset) {
-      const asset = await this.prisma.asset.findUnique({
-        where: { releaseId: release.id },
+    if (release.asset) {
+      await this.prisma.asset.update({
+        where: { id: release.asset.id },
+        data: { downloadUrl: `/api/v1/updates/download/${release.asset.id}` },
       });
-      if (asset) {
-        await this.prisma.asset.update({
-          where: { id: asset.id },
-          data: { downloadUrl: `/api/v1/updates/download/${asset.id}` },
-        });
-      }
     }
 
     const refreshed = await this.prisma.release.findUnique({
@@ -181,7 +177,7 @@ export class ProjectsService {
       data: {
         projectId,
         version: body.version,
-        channel: body.channel as Channel,
+        channel: body.channel as $Enums.Channel,
         notes: body.notes ?? null,
         asset: {
           create: {
@@ -228,7 +224,7 @@ export class ProjectsService {
       data: {
         projectId,
         version: source.version,
-        channel: body.channel as Channel,
+        channel: body.channel as $Enums.Channel,
         notes: source.notes,
         asset: source.asset
           ? {

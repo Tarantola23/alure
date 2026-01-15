@@ -1,5 +1,6 @@
 from alure_sdk import AlureClient, FileStorage, HttpError
 import urllib.error
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -48,14 +49,39 @@ def is_newer_version(latest: str, current: str) -> bool:
     return latest_parts > current_parts
 
 
+def print_expiry(client: AlureClient) -> None:
+    stored = client.storage.load_receipt()
+    if not stored:
+        return
+    try:
+        payload = client.verifier.parse(stored.receipt)
+    except Exception:
+        print("License expires: unknown")
+        return
+    expires_at = payload.get("expires_at")
+    if not expires_at:
+        print("License expires: never")
+        return
+    exp_dt = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+    now = datetime.now(timezone.utc)
+    remaining = exp_dt - now
+    if remaining.total_seconds() <= 0:
+        print("License expired.")
+        return
+    days = remaining.days
+    hours = remaining.seconds // 3600
+    print(f"License expires in {days} day(s), {hours} hour(s).")
+
+
 def main() -> None:
     client = AlureClient(
-        base_url="http://localhost:3000/api/v1",
+        base_url="https://alure-api-ceckp66sva-ey.a.run.app/api/v1",
         storage=FileStorage("./.alure-client"),
     )
 
     if ensure_license(client):
         print("Hello world!")
+        print_expiry(client)
         project_id = client.project_id_from_receipt()
         if project_id:
             version_file = Path("./.alure-client/installed_version.txt")
@@ -85,6 +111,7 @@ def main() -> None:
     print("License missing or invalid. Activation required.")
     if activate_flow(client):
         print("Hello world!")
+        print_expiry(client)
     else:
         print("Unable to activate license.")
 
