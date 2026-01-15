@@ -1,29 +1,57 @@
-# Alure (proto)
+# Alure
 
-Piattaforma open source per licensing + aggiornamenti software desktop, con dashboard e SDK ufficiali (Python + Rust).
+Alure is an open source, self-hosted platform for desktop software licensing and update distribution. It bundles a web dashboard, a REST API, and official SDKs (Python and Rust) so teams can manage projects, licenses, and releases without relying on external SaaS.
 
-Questo repository parte con un prototipo basato su Firebase per velocizzare la validazione. L'obiettivo finale resta una versione 100% self-hosted (PostgreSQL + storage S3/FS) senza dipendenze SaaS.
+## Key Features
+- Multi-project dashboard with licensing, activations, and releases.
+- License keys, activation limits, revocation, and signed receipts.
+- Update channels (stable/beta/hotfix) with asset upload and checksums.
+- Public update check endpoint with protected downloads.
+- Offline-first verification using receipts and configurable grace period.
+- SDKs for Python and Rust using the same API rules.
 
-## Obiettivi
-- Licensing completo (chiavi, attivazioni, revoche, receipt firmati)
-- Update service (canali, asset, checksum, promozione/rollback)
-- API REST versionata con token + scope
-- SDK Python e Rust allineati alla stessa API
-- Installazione self-hosted con Docker Compose
+## Repository Layout
+- `server/` NestJS API + Prisma schema.
+- `dashboard/` React + Vite web UI.
+- `sdk-python/` Python SDK and examples.
+- `sdk-rust/` Rust SDK crate.
+- `docs/` architecture and roadmap.
+- `infra/` deployment notes.
 
-## Struttura repo
-- `docs/` architettura, roadmap e analisi stack
-- `server/` backend API + dashboard (prototipo Firebase)
-- `sdk-python/` SDK Python
-- `sdk-rust/` SDK Rust
-- `infra/` configurazioni per deployment self-hosted
+## Quick Start (Local)
+Backend:
+```bash
+cd server
+npm install
+npx prisma db push
+npm run start:dev
+```
 
-## Stato
-- **Fase 0 (prototype):** Firebase per auth/storage/database
-- **Fase 1 (self-hosted):** PostgreSQL + storage S3/FS + auth interna
+Dashboard:
+```bash
+cd dashboard
+npm install
+npm run dev
+```
 
-## Quick start (placeholder)
-Documenti di architettura e roadmap: `docs/architecture.md`, `docs/roadmap.md`.
+By default the dashboard reads `VITE_API_BASE` from `dashboard/.env`.
+
+## Configuration
+Required env vars for the server:
+- `DATABASE_URL` (PostgreSQL)
+- `JWT_SECRET`
+- `RECEIPT_PRIVATE_KEY`
+- `DOWNLOAD_TOKEN_SECRET`
+
+Optional:
+- `GCS_BUCKET` and `GCS_PREFIX` for persistent asset storage on Google Cloud Storage.
+- `SWAGGER_ENABLED=true` to expose `/api` docs.
+
+## Storage Notes
+Cloud Run filesystem is ephemeral. For production use, configure `GCS_BUCKET` so release assets are stored in a bucket. Local development can use the filesystem.
+
+## Auth Bootstrap
+On first run, the dashboard shows an admin creation form. After the first admin is created, bootstrap is disabled.
 
 ## License
-Da definire (consigliato: Apache-2.0 o AGPL-3.0 per forza di condivisione).
+TBD. Recommended: Apache-2.0 or AGPL-3.0 depending on your distribution needs.
