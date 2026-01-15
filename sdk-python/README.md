@@ -14,6 +14,23 @@ Funzionalita principali:
 pip install -e .
 ```
 
+## Installazione (PyPI)
+```
+pip install alure-sdk
+```
+
+## Pubblicazione su PyPI
+Prerequisiti:
+- Accesso a PyPI (account: `tarantola23`).
+- Token API PyPI salvato in ambiente (`TWINE_USERNAME=__token__`, `TWINE_PASSWORD=<token>`).
+
+Build e upload:
+```
+python -m pip install --upgrade build twine
+python -m build
+python -m twine upload dist/*
+```
+
 ## Uso rapido
 ```python
 from alure_sdk import AlureClient
