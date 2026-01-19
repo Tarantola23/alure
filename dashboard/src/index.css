@@ -4,20 +4,28 @@
   font-family: 'Space Grotesk', sans-serif;
   line-height: 1.5;
   font-weight: 400;
-  color: #f5f2ed;
-  background-color: #0f0c14;
+  color: #1e2a35;
+  background-color: #eef2f6;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   --font-body: 'Space Grotesk', sans-serif;
   --font-display: 'DM Serif Display', serif;
-  --text-primary: #f4f1ec;
-  --text-muted: #bcb6ae;
-  --surface-strong: rgba(28, 23, 36, 0.9);
-  --surface-soft: rgba(32, 27, 43, 0.85);
-  --shadow-soft: 0 18px 40px rgba(0, 0, 0, 0.35);
-  --shadow-strong: 0 24px 60px rgba(0, 0, 0, 0.45);
+  --text-primary: #1e2a35;
+  --text-muted: #5f6b7a;
+  --surface-strong: #f7f9fc;
+  --surface-soft: #eef2f6;
+  --surface-card: #ffffff;
+  --border-soft: rgba(30, 42, 53, 0.12);
+  --accent: #2c6f7c;
+  --accent-strong: #1f5663;
+  --accent-soft: rgba(44, 111, 124, 0.12);
+  --accent-contrast: #f8fbfc;
+  --danger: #c94b4b;
+  --danger-soft: rgba(201, 75, 75, 0.12);
+  --shadow-soft: 0 18px 40px rgba(22, 34, 44, 0.12);
+  --shadow-strong: 0 24px 60px rgba(22, 34, 44, 0.18);
 }
 
 * {
@@ -27,9 +35,9 @@
 body {
   margin: 0;
   min-height: 100vh;
-  background: radial-gradient(circle at top, rgba(78, 61, 116, 0.6), transparent 60%),
-    radial-gradient(circle at 20% 20%, rgba(255, 200, 87, 0.18), transparent 55%),
-    #0f0c14;
+  background: radial-gradient(circle at top, rgba(196, 220, 235, 0.7), transparent 60%),
+    radial-gradient(circle at 20% 20%, rgba(109, 151, 179, 0.18), transparent 55%),
+    #eef2f6;
 }
 
 a {
@@ -38,6 +46,6 @@ a {
 }
 
 #root {
-  max-width: 1200px;
-  margin: 0 auto;
+  min-height: 100vh;
+  width: 100%;
 }

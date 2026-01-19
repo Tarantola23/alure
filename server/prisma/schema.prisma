@@ -32,6 +32,8 @@ model License {
   durationDays   Int?
   expiresAt      DateTime?
   notes          String?
+  bulkCreated    Boolean      @default(false)
+  recipientEmailHash String?
   revoked        Boolean      @default(false)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
@@ -84,6 +86,17 @@ model User {
   role         String
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+  invites      UserInvite[]
+}
+
+model UserInvite {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
 }
 
 model Plan {
@@ -95,4 +108,20 @@ model Plan {
   durationDaysDefault   Int?
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
+}
+
+model SmtpSettings {
+  id                       String   @id @default(cuid())
+  host                     String
+  port                     Int
+  username                 String
+  passwordEnc              String
+  fromEmail                String
+  fromName                 String?
+  secure                   Boolean  @default(false)
+  verifiedAt               DateTime?
+  verificationCodeHash      String?
+  verificationCodeExpiresAt DateTime?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
 }

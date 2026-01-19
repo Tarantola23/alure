@@ -1,6 +1,18 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsBoolean, IsIn, IsInt, IsNotEmpty, IsObject, IsOptional, IsString, Min } from 'class-validator';
+import {
+  ArrayMinSize,
+  IsArray,
+  IsBoolean,
+  IsEmail,
+  IsIn,
+  IsInt,
+  IsNotEmpty,
+  IsObject,
+  IsOptional,
+  IsString,
+  Min,
+} from 'class-validator';
 
 export class ActivateRequestDto {
   @ApiProperty({ example: 'ALR-AB12CD-34EF56-7890AB' })
@@ -153,6 +165,76 @@ export class CreateLicenseResponseDto {
   license_key: string;
 }
 
+export class BulkCreateLicensesRequestDto {
+  @ApiProperty({ example: 'project-demo' })
+  @IsString()
+  @IsNotEmpty()
+  project_id: string;
+
+  @ApiProperty({ example: 'basic' })
+  @IsString()
+  @IsNotEmpty()
+  plan: string;
+
+  @ApiProperty({ minimum: 0, example: 1 })
+  @IsNotEmpty()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  max_activations: number;
+
+  @ApiPropertyOptional({ example: 365 })
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  duration_days?: number;
+
+  @ApiPropertyOptional({ example: 'Customer batch A' })
+  @IsOptional()
+  @IsString()
+  notes?: string;
+
+  @ApiProperty({ type: [String], example: ['user1@example.com', 'user2@example.com'] })
+  @IsArray()
+  @ArrayMinSize(1)
+  @IsEmail({}, { each: true })
+  recipients: string[];
+}
+
+export class BulkCreateLicenseItemDto {
+  @ApiProperty()
+  email: string;
+
+  @ApiProperty()
+  license_id: string;
+
+  @ApiProperty()
+  license_key: string;
+}
+
+export class BulkCreateLicenseErrorDto {
+  @ApiProperty()
+  email: string;
+
+  @ApiProperty()
+  error: string;
+
+  @ApiPropertyOptional()
+  license_id?: string;
+
+  @ApiPropertyOptional()
+  license_key?: string;
+}
+
+export class BulkCreateLicensesResponseDto {
+  @ApiProperty({ type: [BulkCreateLicenseItemDto] })
+  created: BulkCreateLicenseItemDto[];
+
+  @ApiProperty({ type: [BulkCreateLicenseErrorDto] })
+  failed: BulkCreateLicenseErrorDto[];
+}
+
 export class LicenseListItemDto {
   @ApiProperty()
   @IsString()
@@ -181,6 +263,11 @@ export class LicenseListItemDto {
   @ApiPropertyOptional()
   @IsOptional()
   notes?: string;
+
+  @ApiPropertyOptional()
+  @IsBoolean()
+  @IsOptional()
+  bulk_created?: boolean;
 
   @ApiPropertyOptional()
   @IsString()

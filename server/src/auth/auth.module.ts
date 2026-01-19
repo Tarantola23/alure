@@ -1,8 +1,11 @@
 import { Module, OnModuleInit } from '@nestjs/common';
 import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
+import { PrismaModule } from '../prisma/prisma.module';
+import { SmtpModule } from '../smtp/smtp.module';
 
 @Module({
+  imports: [PrismaModule, SmtpModule],
   controllers: [AuthController],
   providers: [AuthService],
   exports: [AuthService],

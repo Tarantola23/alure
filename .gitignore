@@ -8,6 +8,7 @@
 **/Thumbs.db
 **/.env
 **/.env.*
+infra/cloudrun-env.yaml
 **/.firebase/
 server/prisma/dev.db
 server/storage/

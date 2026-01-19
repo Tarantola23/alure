@@ -1,10 +1,14 @@
-import { Body, Controller, Get, Post, Put, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Post, Put, Req, UseGuards } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AuthGuard } from './auth.guard';
 import { AuthService } from './auth.service';
 import {
+  AcceptInviteRequestDto,
+  AcceptInviteResponseDto,
   BootstrapRequestDto,
   BootstrapStatusDto,
+  CreateUserRequestDto,
+  CreateUserResponseDto,
   LoginRequestDto,
   LoginResponseDto,
   UpdateProfileDto,
@@ -44,5 +48,23 @@ export class AuthController {
   @Post('bootstrap')
   async bootstrap(@Body() body: BootstrapRequestDto): Promise<LoginResponseDto> {
     return this.authService.bootstrapAdmin(body);
+  }
+
+  @Post('users')
+  @ApiBearerAuth()
+  @UseGuards(AuthGuard)
+  async createUser(
+    @Req() req: { user?: { role: string } },
+    @Body() body: CreateUserRequestDto,
+  ): Promise<CreateUserResponseDto> {
+    if (req.user?.role !== 'admin') {
+      throw new ForbiddenException('admin_only');
+    }
+    return this.authService.createUserInvite(body);
+  }
+
+  @Post('invite/accept')
+  async acceptInvite(@Body() body: AcceptInviteRequestDto): Promise<AcceptInviteResponseDto> {
+    return this.authService.acceptInvite(body);
   }
 }

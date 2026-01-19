@@ -4,6 +4,10 @@ import {
   ActivateRequestDto,
   ActivateResponseDto,
   ActivationListItemDto,
+  BulkCreateLicenseErrorDto,
+  BulkCreateLicenseItemDto,
+  BulkCreateLicensesRequestDto,
+  BulkCreateLicensesResponseDto,
   CreateLicenseRequestDto,
   CreateLicenseResponseDto,
   LicenseListItemDto,
@@ -13,11 +17,15 @@ import {
   VerifyResponseDto,
 } from './licensing.types';
 import { PrismaService } from '../prisma/prisma.service';
+import { SmtpService } from '../smtp/smtp.service';
 import { createReceipt, verifyReceipt } from './receipt';
 
 @Injectable()
 export class LicensingService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly smtpService: SmtpService,
+  ) {}
 
   private hash(value: string): string {
     return createHash('sha256').update(value).digest('hex');
@@ -26,6 +34,50 @@ export class LicensingService {
   private generateLicenseKey(): string {
     const segment = () => randomBytes(3).toString('hex').toUpperCase();
     return `ALR-${segment()}-${segment()}-${segment()}`;
+  }
+
+  private hashEmail(email: string): string {
+    return createHash('sha256').update(email.trim().toLowerCase()).digest('hex');
+  }
+
+  private extractRecipientFromNotes(notes: string): string | null {
+    const match = notes.match(/Recipient:\s*([^|]+)/i);
+    return match ? match[1].trim() : null;
+  }
+
+  private stripRecipientFromNotes(notes: string): string | null {
+    const cleaned = notes
+      .split('|')
+      .map((part) => part.trim())
+      .filter((part) => part && !part.toLowerCase().startsWith('recipient:'));
+    if (cleaned.length === 0) {
+      return null;
+    }
+    return cleaned.join(' | ');
+  }
+
+  private async backfillBulkRecipientHashes(): Promise<void> {
+    const candidates = await this.prisma.license.findMany({
+      where: {
+        recipientEmailHash: null,
+        notes: { contains: 'Recipient:' },
+      },
+      select: { id: true, notes: true },
+    });
+    for (const license of candidates) {
+      if (!license.notes) continue;
+      const email = this.extractRecipientFromNotes(license.notes);
+      if (!email) continue;
+      const cleanedNotes = this.stripRecipientFromNotes(license.notes);
+      await this.prisma.license.update({
+        where: { id: license.id },
+        data: {
+          bulkCreated: true,
+          recipientEmailHash: this.hashEmail(email),
+          notes: cleanedNotes,
+        },
+      });
+    }
   }
 
   async listLicenses(projectId?: string): Promise<LicenseListItemDto[]> {
@@ -42,6 +94,7 @@ export class LicensingService {
       revoked: license.revoked,
       duration_days: license.durationDays ?? undefined,
       notes: license.notes ?? undefined,
+      bulk_created: license.bulkCreated,
       expires_at: license.expiresAt ? license.expiresAt.toISOString() : undefined,
       created_at: license.createdAt.toISOString(),
     }));
@@ -75,6 +128,98 @@ export class LicensingService {
       license_id: license.id,
       license_key: licenseKey,
     };
+  }
+
+  async createBulkLicenses(body: BulkCreateLicensesRequestDto): Promise<BulkCreateLicensesResponseDto> {
+    const recipients = Array.from(
+      new Set(body.recipients.map((email) => email.trim().toLowerCase()).filter(Boolean)),
+    );
+    if (recipients.length === 0) {
+      throw new HttpException('recipients_required', HttpStatus.BAD_REQUEST);
+    }
+
+    const plan = await this.prisma.plan.findUnique({ where: { name: body.plan } });
+    if (!plan) {
+      throw new HttpException('plan_not_found', HttpStatus.BAD_REQUEST);
+    }
+
+    const project = await this.prisma.project.findUnique({ where: { id: body.project_id } });
+    if (!project) {
+      throw new HttpException('project_not_found', HttpStatus.NOT_FOUND);
+    }
+
+    await this.backfillBulkRecipientHashes();
+    await this.smtpService.assertVerified();
+
+    const durationDays = body.duration_days ?? plan.durationDaysDefault ?? null;
+    const expiresAt = durationDays ? new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000) : null;
+    const created: BulkCreateLicenseItemDto[] = [];
+    const failed: BulkCreateLicenseErrorDto[] = [];
+    const now = new Date();
+
+    for (const email of recipients) {
+      let licenseId: string | undefined;
+      let licenseKey: string | undefined;
+      try {
+        const recipientHash = this.hashEmail(email);
+        const existing = await this.prisma.license.findFirst({
+          where: {
+            projectId: body.project_id,
+            plan: body.plan,
+            revoked: false,
+            recipientEmailHash: recipientHash,
+            OR: [
+              { expiresAt: null },
+              { expiresAt: { gt: now } },
+            ],
+          },
+        });
+        if (existing) {
+          failed.push({
+            email,
+            error: 'active_license_exists',
+            license_id: existing.id,
+          });
+          continue;
+        }
+        licenseKey = this.generateLicenseKey();
+        const licenseKeyHash = this.hash(licenseKey);
+        const license = await this.prisma.license.create({
+          data: {
+            projectId: body.project_id,
+            licenseKeyHash,
+            plan: body.plan,
+            maxActivations: body.max_activations,
+            durationDays,
+            expiresAt,
+            notes: body.notes?.trim() || null,
+            bulkCreated: true,
+            recipientEmailHash: recipientHash,
+          },
+        });
+        licenseId = license.id;
+        await this.smtpService.sendLicenseEmail({
+          toEmail: email,
+          projectName: project.name,
+          plan: body.plan,
+          maxActivations: body.max_activations,
+          durationDays: durationDays ?? undefined,
+          expiresAt: expiresAt ?? undefined,
+          licenseKey,
+        });
+        created.push({ email, license_id: license.id, license_key: licenseKey });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'unknown_error';
+        failed.push({
+          email,
+          error: message,
+          license_id: licenseId,
+          license_key: licenseKey,
+        });
+      }
+    }
+
+    return { created, failed };
   }
 
   async listActivations(licenseId: string): Promise<ActivationListItemDto[]> {
@@ -111,6 +256,17 @@ export class LicensingService {
 
       if (license.expiresAt && now > license.expiresAt) {
         throw new HttpException('license_expired', HttpStatus.FORBIDDEN);
+      }
+
+      const existingActivation = await tx.activation.findFirst({
+        where: {
+          licenseId: license.id,
+          deviceIdHash,
+          revoked: false,
+        },
+      });
+      if (existingActivation) {
+        throw new HttpException('activation_already_exists', HttpStatus.CONFLICT);
       }
 
       const activeCount = await tx.activation.count({

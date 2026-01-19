@@ -4,6 +4,7 @@
 **/.env
 **/.env.*
 **/storage
+!server/src/storage/**
 **/coverage
 **/.cache
 **/*.log

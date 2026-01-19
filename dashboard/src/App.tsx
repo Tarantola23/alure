@@ -8,7 +8,10 @@ import {
   Outlet,
   Route,
   Routes,
+  useLocation,
   useNavigate,
+  useMatch,
+  useOutletContext,
   useParams,
   useSearchParams,
 } from 'react-router-dom'
@@ -16,8 +19,6 @@ import './App.css'
 
 const API_BASE = import.meta.env.VITE_API_BASE ?? 'http://localhost:3000/api/v1'
 const API_ORIGIN = API_BASE.replace(/\/api\/v1$/, '')
-
-type ApiStatus = 'idle' | 'loading' | 'ok' | 'error'
 
 type Project = {
   id: string
@@ -33,6 +34,7 @@ type License = {
   revoked: boolean
   duration_days?: number
   notes?: string
+  bulk_created?: boolean
   expires_at?: string
   created_at: string
 }
@@ -75,8 +77,63 @@ type UserProfile = {
   role: string
 }
 
+type ProjectNavContext = {
+  licenseCount: number
+  activationCount: number
+  releaseCount: number
+}
+
+type SmtpSettings = {
+  host: string
+  port: number
+  username: string
+  from_email: string
+  from_name?: string
+  secure: boolean
+  has_password: boolean
+  verified: boolean
+  verified_at?: string
+}
+
+type BulkCreateLicenseItem = {
+  email: string
+  license_id: string
+  license_key: string
+}
+
+type BulkCreateLicenseError = {
+  email: string
+  error: string
+  license_id?: string
+  license_key?: string
+}
+
+type BulkCreateLicensesResponse = {
+  created: BulkCreateLicenseItem[]
+  failed: BulkCreateLicenseError[]
+}
+
 const STORAGE_KEY = 'alure_auth'
 const TOKEN_KEY = 'alure_token'
+const SESSION_EXPIRED_KEY = 'alure_session_expired'
+const DASHBOARD_VERSION = '0.0.0'
+const FAVORITES_KEY = 'alure_favorite_projects'
+
+const readFavorites = (): string[] => {
+  try {
+    const raw = window.localStorage.getItem(FAVORITES_KEY)
+    if (!raw) return []
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((id) => typeof id === 'string') : []
+  } catch {
+    return []
+  }
+}
+
+const writeFavorites = (ids: string[]) => {
+  window.localStorage.setItem(FAVORITES_KEY, JSON.stringify(ids))
+  window.dispatchEvent(new CustomEvent('alure:favorites-updated'))
+}
 
 const fetchJson = async <T,>(url: string, options?: RequestInit): Promise<T> => {
   const token = window.localStorage.getItem(TOKEN_KEY)
@@ -86,6 +143,12 @@ const fetchJson = async <T,>(url: string, options?: RequestInit): Promise<T> => 
   }
   const res = await fetch(url, { ...options, headers })
   if (!res.ok) {
+    if (res.status === 401) {
+      window.localStorage.removeItem(TOKEN_KEY)
+      window.localStorage.removeItem(STORAGE_KEY)
+      window.localStorage.setItem(SESSION_EXPIRED_KEY, 'true')
+      window.dispatchEvent(new CustomEvent('alure:unauthorized'))
+    }
     throw new Error(`HTTP ${res.status}`)
   }
   return res.json() as Promise<T>
@@ -124,6 +187,9 @@ function LoginGate({ children }: { children: React.ReactNode }) {
   const [loginUser, setLoginUser] = useState('')
   const [loginPass, setLoginPass] = useState('')
   const [loginError, setLoginError] = useState<string | null>(null)
+  const [sessionExpired, setSessionExpired] = useState<boolean>(() => {
+    return window.localStorage.getItem(SESSION_EXPIRED_KEY) === 'true'
+  })
   const [bootstrapName, setBootstrapName] = useState('')
   const [bootstrapEmail, setBootstrapEmail] = useState('')
   const [bootstrapPass, setBootstrapPass] = useState('')
@@ -145,6 +211,40 @@ function LoginGate({ children }: { children: React.ReactNode }) {
     void checkBootstrap()
   }, [])
 
+  useEffect(() => {
+    if (!isAuthed) return
+    let mounted = true
+    const checkHealth = async () => {
+      try {
+        await fetchJson<{ has_admin: boolean }>(`${API_BASE}/auth/bootstrap`)
+        if (mounted) setBackendStatus('online')
+      } catch {
+        if (mounted) setBackendStatus('offline')
+      }
+    }
+    void checkHealth()
+    const timer = window.setInterval(checkHealth, 20000)
+    return () => {
+      mounted = false
+      window.clearInterval(timer)
+    }
+  }, [isAuthed])
+
+  useEffect(() => {
+    if (!isAuthed) return
+    const handleUnauthorized = () => {
+      if (isAuthed) {
+        window.localStorage.removeItem(TOKEN_KEY)
+        window.localStorage.removeItem(STORAGE_KEY)
+        setIsAuthed(false)
+      }
+    }
+    window.addEventListener('alure:unauthorized', handleUnauthorized)
+    return () => {
+      window.removeEventListener('alure:unauthorized', handleUnauthorized)
+    }
+  }, [isAuthed])
+
   const handleLogin = async (event: React.FormEvent) => {
     event.preventDefault()
     if (!loginUser || !loginPass) {
@@ -160,6 +260,8 @@ function LoginGate({ children }: { children: React.ReactNode }) {
       })
       window.localStorage.setItem(TOKEN_KEY, response.token)
       window.localStorage.setItem(STORAGE_KEY, 'true')
+      window.localStorage.removeItem(SESSION_EXPIRED_KEY)
+      setSessionExpired(false)
       setIsAuthed(true)
     } catch {
       setLoginError('Invalid credentials.')
@@ -185,6 +287,8 @@ function LoginGate({ children }: { children: React.ReactNode }) {
       })
       window.localStorage.setItem(TOKEN_KEY, response.token)
       window.localStorage.setItem(STORAGE_KEY, 'true')
+      window.localStorage.removeItem(SESSION_EXPIRED_KEY)
+      setSessionExpired(false)
       setIsAuthed(true)
     } catch {
       setBootstrapError('Unable to create admin user.')
@@ -203,7 +307,10 @@ function LoginGate({ children }: { children: React.ReactNode }) {
         <div className="login">
           <div className="login-panel">
             <div className="login-header">
-              <span className="brand-mark">Alure</span>
+              <div className="brand-line">
+                <img src="/ICON.png" alt="Alure" className="brand-logo" />
+                <span className="brand-mark">Alure</span>
+              </div>
               <p>Checking server status...</p>
             </div>
           </div>
@@ -212,16 +319,32 @@ function LoginGate({ children }: { children: React.ReactNode }) {
     }
     return (
       <div className="login">
-        <div className="login-panel">
+        <div className="login-panel first-account">
+          {!hasAdmin && (
+            <div className="confetti" aria-hidden="true">
+              {Array.from({ length: 12 }).map((_, index) => (
+                <span key={`confetti-${index}`} />
+              ))}
+            </div>
+          )}
           <div className="login-header">
-            <span className="brand-mark">Alure</span>
-            <p>{hasAdmin ? 'Self-hosted licensing console' : 'Create administrator account'}</p>
+            <div className="brand-line">
+              <img src="/ICON.png" alt="Alure" className="brand-logo" />
+              <span className="brand-mark">Alure</span>
+            </div>
+            <p>{hasAdmin ? 'Self-hosted licensing console' : 'Welcome! Set up your first admin account.'}</p>
           </div>
           <div className="login-status">
-            <span className={`status ${backendStatus}`}>{backendStatus === 'online' ? 'API Online' : 'API Offline'}</span>
+            <span className="status-line">
+              <span className={`status-dot ${backendStatus === 'online' ? 'ok' : 'offline'}`} />
+              <span className={`status ${backendStatus}`}>{backendStatus === 'online' ? 'API Online' : 'API Offline'}</span>
+            </span>
           </div>
           {hasAdmin ? (
             <form className="login-form" onSubmit={handleLogin}>
+              {sessionExpired && (
+                <div className="notice">Session expired. Please sign in again.</div>
+              )}
               <label className="field">
                 <span>Email</span>
                 <input
@@ -246,7 +369,10 @@ function LoginGate({ children }: { children: React.ReactNode }) {
               </button>
             </form>
           ) : (
-            <form className="login-form" onSubmit={handleBootstrap}>
+            <form className="login-form first-account-form" onSubmit={handleBootstrap}>
+              {sessionExpired && (
+                <div className="notice">Session expired. Please sign in again.</div>
+              )}
               <label className="field">
                 <span>Name</span>
                 <input
@@ -291,45 +417,418 @@ function LoginGate({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <div className="brand">
-          <span className="brand-mark">Alure</span>
-          <span className="brand-subtitle">Licensing and Releases</span>
-        </div>
-        <div className="topbar-actions">
-          <div className="pill">Local SQLite</div>
-          <Link className="ghost" to="/settings">
-            Settings
-          </Link>
-          <button className="ghost" onClick={handleLogout}>
-            Sign out
-          </button>
-        </div>
-      </header>
+    <AppShell backendStatus={backendStatus} onLogout={handleLogout}>
       {children}
+    </AppShell>
+  )
+}
+
+function InviteAccept() {
+  const [searchParams] = useSearchParams()
+  const token = searchParams.get('token') ?? ''
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [message, setMessage] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const navigate = useNavigate()
+
+  const handleAccept = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!token) {
+      setError('Invite token is missing.')
+      return
+    }
+    if (!password.trim() || password !== confirmPassword) {
+      setError('Passwords do not match.')
+      return
+    }
+    setError(null)
+    try {
+      await fetchJson<{ accepted: boolean }>(`${API_BASE}/auth/invite/accept`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ token, password }),
+      })
+      setMessage('Invite accepted. You can sign in now.')
+      setTimeout(() => navigate('/'), 1200)
+    } catch (err) {
+      if (err instanceof Error) {
+        setError(`Unable to accept invite (${err.message}).`)
+        return
+      }
+      setError('Unable to accept invite.')
+    }
+  }
+
+  return (
+    <div className="login">
+      <div className="login-panel">
+        <div className="login-header">
+          <div className="brand-line">
+            <img src="/ICON.png" alt="Alure" className="brand-logo" />
+            <span className="brand-mark">Alure</span>
+          </div>
+          <p>Accept your invite and set a password.</p>
+        </div>
+        <form className="login-form" onSubmit={handleAccept}>
+          <label className="field">
+            <span>New password</span>
+            <input
+              type="password"
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="Choose a password"
+            />
+          </label>
+          <label className="field">
+            <span>Confirm password</span>
+            <input
+              type="password"
+              value={confirmPassword}
+              onChange={(event) => setConfirmPassword(event.target.value)}
+              placeholder="Repeat password"
+            />
+          </label>
+          {error && <div className="error">{error}</div>}
+          {message && <div className="notice">{message}</div>}
+          <button className="primary" type="submit" disabled={!token}>
+            Accept invite
+          </button>
+        </form>
+      </div>
     </div>
   )
 }
-function ProjectsHome() {
+
+function AppShell({
+  children,
+  backendStatus,
+  onLogout,
+}: {
+  children: React.ReactNode
+  backendStatus: 'online' | 'offline'
+  onLogout: () => void
+}) {
+  const [sidebarOpen, setSidebarOpen] = useState(false)
   const [projects, setProjects] = useState<Project[]>([])
-  const [projectName, setProjectName] = useState('')
-  const [projectError, setProjectError] = useState<string | null>(null)
-  const [deleteError, setDeleteError] = useState<string | null>(null)
-  const [projectQuery, setProjectQuery] = useState('')
-  const [projectSort, setProjectSort] = useState<'name_asc' | 'name_desc' | 'created_desc' | 'created_asc'>('created_desc')
-  const [projectPage, setProjectPage] = useState(1)
-  const [projectPageSize, setProjectPageSize] = useState(12)
+  const [favoriteProjectIds, setFavoriteProjectIds] = useState<string[]>(() => readFavorites())
   const navigate = useNavigate()
+  const match = useMatch('/projects/:projectId/*')
+  const settingsMatch = useMatch('/settings')
+  const location = useLocation()
+  const activeProjectId = match?.params.projectId ?? null
+  const isSettings = Boolean(settingsMatch)
+  const activeProject = projects.find((project) => project.id === activeProjectId) ?? null
+  const settingsHash = location.hash || '#plans'
 
   const loadProjects = async () => {
     const data = await fetchJson<Project[]>(`${API_BASE}/projects`)
     setProjects(data)
+    const existingIds = new Set(data.map((project) => project.id))
+    const nextFavorites = favoriteProjectIds.filter((id) => existingIds.has(id))
+    if (nextFavorites.length !== favoriteProjectIds.length) {
+      setFavoriteProjectIds(nextFavorites)
+      writeFavorites(nextFavorites)
+    }
   }
 
   useEffect(() => {
     void loadProjects()
   }, [])
+
+  useEffect(() => {
+    const handleProjectsUpdated = () => {
+      void loadProjects()
+    }
+    const handleFavoritesUpdated = () => {
+      setFavoriteProjectIds(readFavorites())
+    }
+    window.addEventListener('alure:projects-updated', handleProjectsUpdated)
+    window.addEventListener('alure:favorites-updated', handleFavoritesUpdated)
+    return () => {
+      window.removeEventListener('alure:projects-updated', handleProjectsUpdated)
+      window.removeEventListener('alure:favorites-updated', handleFavoritesUpdated)
+    }
+  }, [])
+
+  const favoriteProjects = useMemo(
+    () =>
+      projects
+        .filter((project) => favoriteProjectIds.includes(project.id))
+        .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()),
+    [projects, favoriteProjectIds],
+  )
+
+  const handleSelectProject = (projectId: string) => {
+    navigate(`/projects/${projectId}`)
+    setSidebarOpen(false)
+  }
+
+  const handleToggleFavorite = (projectId: string) => {
+    const next = favoriteProjectIds.includes(projectId)
+      ? favoriteProjectIds.filter((id) => id !== projectId)
+      : [...favoriteProjectIds, projectId]
+    setFavoriteProjectIds(next)
+    writeFavorites(next)
+  }
+
+  const handleProjectKey = (event: React.KeyboardEvent, projectId: string) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      handleSelectProject(projectId)
+    }
+  }
+
+  return (
+    <div className={`app-shell ${isSettings ? 'settings-shell' : ''}`}>
+      {sidebarOpen && (
+        <button
+          className="app-backdrop"
+          type="button"
+          aria-label="Close menu"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+      <aside className={`app-sidebar ${sidebarOpen ? 'open' : ''}`}>
+        <div className="sidebar-brand">
+          <div className="sidebar-brand-row">
+            <div className="brand-line">
+              <img src="/ICON.png" alt="Alure" className="brand-logo" />
+              <span className="brand-mark">Alure</span>
+            </div>
+            <div className="sidebar-actions">
+              <span className="status-indicator">
+                <span className={`status-dot ${backendStatus === 'online' ? 'ok' : 'offline'}`} />
+                <span>{backendStatus === 'online' ? 'API Online' : 'API Offline'}</span>
+              </span>
+              <button className="icon-button" onClick={onLogout} aria-label="Sign out">
+                <i className="fa-solid fa-right-from-bracket" />
+              </button>
+            </div>
+          </div>
+          <span className="brand-subtitle">Licensing and Releases</span>
+        </div>
+        <nav className="app-nav">
+          <NavLink to="/" end onClick={() => setSidebarOpen(false)}>
+            <i className="fa-solid fa-briefcase" aria-hidden="true" />
+            Projects
+          </NavLink>
+          <NavLink to="/settings#plans" onClick={() => setSidebarOpen(false)}>
+            <i className="fa-solid fa-gear" aria-hidden="true" />
+            Settings
+          </NavLink>
+        </nav>
+        {isSettings ? (
+          <div className="sidebar-section">
+            <div className="sidebar-section-title">Settings</div>
+            <nav className="sidebar-subnav">
+              <Link
+                to="/settings#user-profile"
+                className={`project-row ${settingsHash === '#user-profile' ? 'active' : ''}`}
+                onClick={() => setSidebarOpen(false)}
+              >
+                <div className="project-row-main">
+                  <span className="project-row-name">User info</span>
+                  <span className="muted">Profile and credentials</span>
+                </div>
+                <span className="project-row-icon" aria-hidden="true">
+                  <i className="fa-solid fa-user" />
+                </span>
+              </Link>
+              <Link
+                to="/settings#plans"
+                className={`project-row ${settingsHash === '#plans' ? 'active' : ''}`}
+                onClick={() => setSidebarOpen(false)}
+              >
+                <div className="project-row-main">
+                  <span className="project-row-name">Plans</span>
+                  <span className="muted">Licensing tiers</span>
+                </div>
+                <span className="project-row-icon" aria-hidden="true">
+                  <i className="fa-solid fa-layer-group" />
+                </span>
+              </Link>
+              <Link
+                to="/settings#smtp"
+                className={`project-row ${settingsHash === '#smtp' ? 'active' : ''}`}
+                onClick={() => setSidebarOpen(false)}
+              >
+                <div className="project-row-main">
+                  <span className="project-row-name">SMTP</span>
+                  <span className="muted">Email delivery</span>
+                </div>
+                <span className="project-row-icon" aria-hidden="true">
+                  <i className="fa-solid fa-envelope" />
+                </span>
+              </Link>
+            </nav>
+          </div>
+        ) : (
+          <div className="sidebar-section">
+            <div className="sidebar-section-title">Projects</div>
+            <div className="project-list">
+              {favoriteProjects.map((project) => (
+                <div
+                  key={project.id}
+                  className={`project-row project-row-clickable ${activeProjectId === project.id ? 'active' : ''}`}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => handleSelectProject(project.id)}
+                  onKeyDown={(event) => handleProjectKey(event, project.id)}
+                >
+                  <div className="project-row-main">
+                    <span className="project-row-icon" aria-hidden="true">
+                      <i className="fa-solid fa-cube" />
+                    </span>
+                    <div>
+                      <span className="project-row-name">{project.name}</span>
+                      <span className="muted">Created {new Date(project.created_at).toLocaleDateString()}</span>
+                    </div>
+                  </div>
+                  <div className="project-row-actions">
+                    <button
+                      type="button"
+                      className={`icon-button ${favoriteProjectIds.includes(project.id) ? 'active' : ''}`}
+                      onClick={(event) => {
+                        event.stopPropagation()
+                        handleToggleFavorite(project.id)
+                      }}
+                      aria-label="Toggle favorite"
+                    >
+                      <i className={favoriteProjectIds.includes(project.id) ? 'fa-solid fa-star' : 'fa-regular fa-star'} />
+                    </button>
+                    <span className="project-row-id">{project.id.slice(0, 8)}...</span>
+                  </div>
+                </div>
+              ))}
+              {favoriteProjects.length === 0 && (
+                <div className="empty">Star a project in the Projects page to pin it here.</div>
+              )}
+            </div>
+          </div>
+        )}
+        <div className="sidebar-footer">
+          <span>Dashboard v{DASHBOARD_VERSION} · Creato internamente con AI</span>
+        </div>
+      </aside>
+      <main className="app-main">
+        <div className="app-mobile-header">
+          <button
+            className="sidebar-toggle"
+            type="button"
+            onClick={() => setSidebarOpen(true)}
+            aria-label="Open menu"
+          >
+            <span />
+            <span />
+            <span />
+          </button>
+          <div>
+            <span className="sidebar-title">Navigation</span>
+            <h2>{activeProject?.name ?? 'Dashboard'}</h2>
+            {activeProjectId && <span className="muted">ID: {activeProjectId}</span>}
+          </div>
+        </div>
+        {children}
+      </main>
+    </div>
+  )
+}
+
+function ProjectsHome() {
+  const [projects, setProjects] = useState<Project[]>([])
+  const [favorites, setFavorites] = useState<string[]>(() => readFavorites())
+  const [error, setError] = useState<string | null>(null)
+  const [projectName, setProjectName] = useState('')
+  const [projectError, setProjectError] = useState<string | null>(null)
+  const [projectQuery, setProjectQuery] = useState('')
+  const [projectSort, setProjectSort] = useState<'name_asc' | 'name_desc' | 'created_desc' | 'created_asc'>('created_desc')
+  const [deleteTarget, setDeleteTarget] = useState<Project | null>(null)
+  const [deleteConfirm, setDeleteConfirm] = useState('')
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [createModalOpen, setCreateModalOpen] = useState(false)
+  const navigate = useNavigate()
+
+  const loadProjects = async () => {
+    try {
+      const data = await fetchJson<Project[]>(`${API_BASE}/projects`)
+      setProjects(data)
+      const existingIds = new Set(data.map((project) => project.id))
+      const nextFavorites = favorites.filter((id) => existingIds.has(id))
+      if (nextFavorites.length !== favorites.length) {
+        setFavorites(nextFavorites)
+        writeFavorites(nextFavorites)
+      }
+    } catch {
+      setError('Unable to load projects.')
+    }
+  }
+
+  useEffect(() => {
+    void loadProjects()
+  }, [])
+
+  const toggleFavorite = (projectId: string) => {
+    const next = favorites.includes(projectId)
+      ? favorites.filter((id) => id !== projectId)
+      : [...favorites, projectId]
+    setFavorites(next)
+    writeFavorites(next)
+  }
+
+  const handleDeleteProject = (project: Project) => {
+    setDeleteTarget(project)
+    setDeleteConfirm('')
+    setDeleteError(null)
+  }
+
+  const closeDeleteModal = () => {
+    setDeleteTarget(null)
+    setDeleteConfirm('')
+    setDeleteError(null)
+  }
+
+  const confirmDeleteProject = async () => {
+    if (!deleteTarget) return
+    if (deleteConfirm !== deleteTarget.name) {
+      setDeleteError('Project name did not match.')
+      return
+    }
+    setDeleteError(null)
+    await fetchJson<{ deleted: boolean }>(`${API_BASE}/projects/${deleteTarget.id}`, {
+      method: 'DELETE',
+    })
+    const nextFavorites = favorites.filter((id) => id !== deleteTarget.id)
+    if (nextFavorites.length !== favorites.length) {
+      setFavorites(nextFavorites)
+      writeFavorites(nextFavorites)
+    }
+    await loadProjects()
+    window.dispatchEvent(new CustomEvent('alure:projects-updated'))
+    closeDeleteModal()
+  }
+
+  const handleCreateProject = async () => {
+    if (!projectName.trim()) return
+    setProjectError(null)
+    try {
+      await fetchJson<Project>(`${API_BASE}/projects`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: projectName.trim() }),
+      })
+      setProjectName('')
+      await loadProjects()
+      window.dispatchEvent(new CustomEvent('alure:projects-updated'))
+      setCreateModalOpen(false)
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('409')) {
+        setProjectError('Project name already exists.')
+        return
+      }
+      setProjectError('Unable to create project.')
+    }
+  }
 
   const normalizedQuery = projectQuery.trim().toLowerCase()
   const filteredProjects = useMemo(() => {
@@ -353,98 +852,21 @@ function ProjectsHome() {
     return sorted
   }, [projects, normalizedQuery, projectSort])
 
-  const totalProjects = filteredProjects.length
-  const totalProjectPages = Math.max(1, Math.ceil(totalProjects / projectPageSize))
-  const currentProjectPage = Math.min(projectPage, totalProjectPages)
-  const projectStart = (currentProjectPage - 1) * projectPageSize
-  const pagedProjects = filteredProjects.slice(projectStart, projectStart + projectPageSize)
-
-  useEffect(() => {
-    if (projectPage > totalProjectPages) {
-      setProjectPage(totalProjectPages)
-    }
-  }, [projectPage, totalProjectPages])
-
-  const handleCreateProject = async () => {
-    if (!projectName.trim()) return
-    setProjectError(null)
-    try {
-      await fetchJson<Project>(`${API_BASE}/projects`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: projectName.trim() }),
-      })
-      setProjectName('')
-      await loadProjects()
-    } catch (error) {
-      if (error instanceof Error && error.message.includes('409')) {
-        setProjectError('Project name already exists.')
-        return
-      }
-      setProjectError('Unable to create project.')
-    }
-  }
-
-  const handleDeleteProjectFromCard = async (project: Project) => {
-    const confirmation = window.prompt(
-      `Type the project name to delete: ${project.name}`,
-    )
-    if (confirmation !== project.name) {
-      return
-    }
-    try {
-      await fetchJson<{ deleted: boolean }>(`${API_BASE}/projects/${project.id}`, {
-        method: 'DELETE',
-      })
-      await loadProjects()
-    } catch {
-      setDeleteError('Unable to delete project.')
-    }
-  }
-
   return (
     <div className="page">
-      <section className="hero wide">
-        <div className="hero-copy">
-          <h1>Your projects</h1>
-          <p>Create and manage desktop apps from one place. Select a project to view licensing and release details.</p>
+      <section className="card">
+        <div className="card-header">
+          <h2>Start here</h2>
         </div>
-        <div className="hero-panel">
-          <div className="panel-header">
-            <span>New project</span>
-            <span className="pill subtle">Workspace</span>
-          </div>
-          <div className="panel-body">
-            <label className="field">
-              <span>Project name</span>
-              <input
-                type="text"
-                value={projectName}
-                onChange={(event) => setProjectName(event.target.value)}
-                placeholder="e.g. Desktop Suite"
-              />
-            </label>
-            <button className="primary" onClick={handleCreateProject}>
-              Create project
-            </button>
-            {projectError && <div className="error">{projectError}</div>}
-            {deleteError && <div className="error">{deleteError}</div>}
-          </div>
-        </div>
-      </section>
-
-      <section className="project-grid">
-        <div className="toolbar span-2">
-          <div className="toolbar-row">
-            <label className="field">
+        <p className="muted">Pick a project from the sidebar or create a new one to get started.</p>
+        <div className="form compact-form">
+          <div className="form two-column project-filters">
+            <label className="field compact">
               <span>Search</span>
               <input
                 type="text"
                 value={projectQuery}
-                onChange={(event) => {
-                  setProjectQuery(event.target.value)
-                  setProjectPage(1)
-                }}
+                onChange={(event) => setProjectQuery(event.target.value)}
                 placeholder="Project name or ID"
               />
             </label>
@@ -460,87 +882,155 @@ function ProjectsHome() {
                 <option value="name_desc">Name Z-A</option>
               </select>
             </label>
-            <label className="field">
-              <span>Rows</span>
-              <select
-                value={projectPageSize}
-                onChange={(event) => {
-                  setProjectPageSize(Number(event.target.value))
-                  setProjectPage(1)
-                }}
-              >
-                <option value={6}>6</option>
-                <option value={12}>12</option>
-                <option value={24}>24</option>
-              </select>
-            </label>
           </div>
-          <div className="toolbar-row">
-            <span className="muted">
-              Showing {Math.min(projectStart + 1, totalProjects)}-
-              {Math.min(projectStart + pagedProjects.length, totalProjects)} of {totalProjects}
-            </span>
-            <div className="pagination">
-              <button
-                className="ghost"
-                onClick={() => setProjectPage((prev) => Math.max(1, prev - 1))}
-                disabled={currentProjectPage === 1}
-              >
-                Prev
+        </div>
+      </section>
+      <section className="card">
+        <div className="card-header">
+          <div>
+            <h2>All projects</h2>
+            <span className="muted">Manage favorites and remove projects.</span>
+          </div>
+          <div className="card-actions">
+            <button
+              className="icon-button success"
+              onClick={() => {
+                setProjectName('')
+                setProjectError(null)
+                setCreateModalOpen(true)
+              }}
+              aria-label="Create project"
+              title="Create project"
+            >
+              <i className="fa-solid fa-plus" />
+            </button>
+            <button className="ghost" onClick={loadProjects}>
+              <i className="fa-solid fa-rotate-right" />
+              Reload
+            </button>
+          </div>
+        </div>
+        {error && <div className="error">{error}</div>}
+        <div className="project-list">
+          {filteredProjects.map((project) => (
+            <div key={project.id} className="project-row project-row-card">
+              <div className="project-row-main">
+                <span className="project-row-icon" aria-hidden="true">
+                  <i className="fa-solid fa-cube" />
+                </span>
+                <div>
+                  <span className="project-row-name">{project.name}</span>
+                  <span className="muted">Created {new Date(project.created_at).toLocaleDateString()}</span>
+                </div>
+              </div>
+              <div className="project-row-actions">
+                <button
+                  type="button"
+                  className={`icon-button ${favorites.includes(project.id) ? 'active' : ''}`}
+                  onClick={() => toggleFavorite(project.id)}
+                  aria-label="Toggle favorite"
+                >
+                  <i className={favorites.includes(project.id) ? 'fa-solid fa-star' : 'fa-regular fa-star'} />
+                </button>
+                <button className="ghost" onClick={() => navigate(`/projects/${project.id}`)}>
+                  Open
+                </button>
+                <button className="ghost danger" onClick={() => handleDeleteProject(project)}>
+                  Delete
+                </button>
+              </div>
+            </div>
+          ))}
+          {filteredProjects.length === 0 && <div className="empty">No projects yet.</div>}
+        </div>
+      </section>
+      {createModalOpen && (
+        <div className="modal-backdrop" role="presentation" onClick={() => setCreateModalOpen(false)}>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="create-project-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <h2 id="create-project-title">Create project</h2>
+              <button className="icon-button" onClick={() => setCreateModalOpen(false)} aria-label="Close">
+                <i className="fa-solid fa-xmark" />
               </button>
-              <span className="muted">
-                Page {currentProjectPage} / {totalProjectPages}
-              </span>
-              <button
-                className="ghost"
-                onClick={() => setProjectPage((prev) => Math.min(totalProjectPages, prev + 1))}
-                disabled={currentProjectPage === totalProjectPages}
-              >
-                Next
+            </div>
+            <label className="field">
+              <span>Project name</span>
+              <input
+                type="text"
+                value={projectName}
+                onChange={(event) => setProjectName(event.target.value)}
+                placeholder="e.g. Desktop Suite"
+              />
+            </label>
+            {projectError && <div className="error">{projectError}</div>}
+            <div className="modal-actions">
+              <button className="ghost" onClick={() => setCreateModalOpen(false)}>Cancel</button>
+              <button className="primary" onClick={handleCreateProject} disabled={!projectName.trim()}>
+                Create
               </button>
             </div>
           </div>
         </div>
-        {pagedProjects.map((project) => (
-          <div key={project.id} className="project-card">
-            <div>
-              <h3>{project.name}</h3>
-              <span className="muted">Created {new Date(project.created_at).toLocaleDateString()}</span>
-            </div>
-            <div className="project-actions">
-              <button className="primary" onClick={() => navigate(`/projects/${project.id}`)}>
-                Manage
+      )}
+      {deleteTarget && (
+        <div className="modal-backdrop" role="presentation" onClick={closeDeleteModal}>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-project-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <h2 id="delete-project-title">Delete project</h2>
+              <button className="icon-button" onClick={closeDeleteModal} aria-label="Close">
+                <i className="fa-solid fa-xmark" />
               </button>
+            </div>
+            <p className="muted">
+              This will delete <strong>{deleteTarget.name}</strong> and all related data.
+            </p>
+            <label className="field">
+              <span>Type the project name to confirm</span>
+              <input
+                type="text"
+                value={deleteConfirm}
+                onChange={(event) => setDeleteConfirm(event.target.value)}
+                placeholder={deleteTarget.name}
+              />
+            </label>
+            {deleteError && <div className="error">{deleteError}</div>}
+            <div className="modal-actions">
+              <button className="ghost" onClick={closeDeleteModal}>Cancel</button>
               <button
                 className="ghost danger"
-                onClick={() => handleDeleteProjectFromCard(project)}
+                onClick={confirmDeleteProject}
+                disabled={deleteConfirm !== deleteTarget.name}
               >
-                Delete
+                Delete project
               </button>
             </div>
           </div>
-        ))}
-        {pagedProjects.length === 0 && <div className="empty">No projects yet.</div>}
-      </section>
+        </div>
+      )}
     </div>
   )
 }
 
 function ProjectLayout() {
   const { projectId } = useParams()
-  const [project, setProject] = useState<Project | null>(null)
   const [licenseCount, setLicenseCount] = useState(0)
   const [releaseCount, setReleaseCount] = useState(0)
   const [activationCount, setActivationCount] = useState(0)
-  const [sidebarOpen, setSidebarOpen] = useState(false)
 
   useEffect(() => {
     if (!projectId) return
-    const loadProject = async () => {
-      const data = await fetchJson<Project[]>(`${API_BASE}/projects`)
-      const found = data.find((item) => item.id === projectId) ?? null
-      setProject(found)
-    }
     const loadCounts = async () => {
       const [licenses, releases] = await Promise.all([
         fetchJson<License[]>(`${API_BASE}/licenses?project_id=${projectId}`),
@@ -559,12 +1049,7 @@ function ProjectLayout() {
       )
       setActivationCount(activationLists.reduce((sum, list) => sum + list.length, 0))
     }
-    void loadProject()
     void loadCounts()
-  }, [projectId])
-
-  useEffect(() => {
-    setSidebarOpen(false)
   }, [projectId])
 
   if (!projectId) {
@@ -573,99 +1058,49 @@ function ProjectLayout() {
 
   return (
     <div className="project-shell">
-      <div className="project-mobile-header">
-        <button
-          className="hamburger"
-          type="button"
-          onClick={() => setSidebarOpen((prev) => !prev)}
-          aria-label="Toggle project menu"
-        >
-          <span />
-          <span />
-          <span />
-        </button>
-        <div>
-          <span className="sidebar-title">Project</span>
-          <h2>{project?.name ?? projectId}</h2>
-        </div>
-      </div>
-      {sidebarOpen && (
-        <button
-          className="sidebar-backdrop"
-          type="button"
-          aria-label="Close project menu"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
-      <div className="project-layout">
-        <aside className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
-        <div className="sidebar-header">
-          <span className="sidebar-title">Project</span>
-          <h2>{project?.name ?? projectId}</h2>
-          <span className="muted">ID: {projectId.slice(0, 8)}...</span>
-        </div>
-        <nav className="sidebar-nav">
-          <NavLink to={`/projects/${projectId}/overview`}>
-            Overview
-          </NavLink>
-          <NavLink to={`/projects/${projectId}/licenses`}>
-            Licenses <span className="nav-badge">{licenseCount}</span>
-          </NavLink>
-          <NavLink to={`/projects/${projectId}/activations`}>
-            Activations <span className="nav-badge">{activationCount}</span>
-          </NavLink>
-          <NavLink to={`/projects/${projectId}/releases`}>
-            Releases <span className="nav-badge">{releaseCount}</span>
-          </NavLink>
-        </nav>
-        <div className="sidebar-footer">
-          <Link to="/">Back to projects</Link>
-        </div>
-      </aside>
-      <main className="content">
-        <Outlet />
-      </main>
+      <div className="content">
+        <Outlet context={{ licenseCount, activationCount, releaseCount }} />
       </div>
     </div>
   )
 }
+
+function ProjectTabsBar({
+  projectId,
+  licenseCount,
+  activationCount,
+  releaseCount,
+}: {
+  projectId: string
+  licenseCount: number
+  activationCount: number
+  releaseCount: number
+}) {
+  return (
+    <nav className="project-tabs">
+      <NavLink to={`/projects/${projectId}/overview`}>Overview</NavLink>
+      <NavLink to={`/projects/${projectId}/licenses`}>
+        Licenses <span className="nav-badge">{licenseCount}</span>
+      </NavLink>
+      <NavLink to={`/projects/${projectId}/activations`}>
+        Activations <span className="nav-badge">{activationCount}</span>
+      </NavLink>
+      <NavLink to={`/projects/${projectId}/releases`}>
+        Releases <span className="nav-badge">{releaseCount}</span>
+      </NavLink>
+    </nav>
+  )
+}
 function OverviewSection() {
   const { projectId } = useParams()
-  const [status, setStatus] = useState<ApiStatus>('idle')
-  const [lastCheck, setLastCheck] = useState<Date | null>(null)
-  const [latestVersion, setLatestVersion] = useState<string>('n/a')
-  const [updateAvailable, setUpdateAvailable] = useState<boolean | null>(null)
+  const { licenseCount: projectLicenseCount, activationCount, releaseCount: projectReleaseCount } =
+    useOutletContext<ProjectNavContext>()
+  const [latestRelease, setLatestRelease] = useState<Release | null>(null)
   const [licenseCount, setLicenseCount] = useState(0)
   const [releaseCount, setReleaseCount] = useState(0)
 
-  const statusLabel = useMemo(() => {
-    if (status === 'loading') return 'Checking'
-    if (status === 'ok') return 'Online'
-    if (status === 'error') return 'Offline'
-    return 'Idle'
-  }, [status])
-
-  const checkApi = async (id: string) => {
-    setStatus('loading')
-    try {
-      const data = await fetchJson<{ latest_version?: string; update_available?: boolean }>(
-        `${API_BASE}/updates/latest?project_id=${encodeURIComponent(id)}&channel=stable`,
-      )
-      setLatestVersion(data.latest_version ?? 'n/a')
-      setUpdateAvailable(Boolean(data.update_available))
-      setStatus('ok')
-    } catch {
-      setLatestVersion('n/a')
-      setUpdateAvailable(null)
-      setStatus('error')
-    } finally {
-      setLastCheck(new Date())
-    }
-  }
-
   useEffect(() => {
     if (!projectId) return
-    void checkApi(projectId)
     const loadCounts = async () => {
       const [licenses, releases] = await Promise.all([
         fetchJson<License[]>(`${API_BASE}/licenses?project_id=${projectId}`),
@@ -673,6 +1108,15 @@ function OverviewSection() {
       ])
       setLicenseCount(licenses.length)
       setReleaseCount(releases.length)
+      if (releases.length === 0) {
+        setLatestRelease(null)
+        return
+      }
+      const latest = releases.reduce((acc, release) => {
+        if (!acc) return release
+        return new Date(release.published_at) > new Date(acc.published_at) ? release : acc
+      }, releases[0] as Release | null)
+      setLatestRelease(latest)
     }
     void loadCounts()
   }, [projectId])
@@ -684,6 +1128,14 @@ function OverviewSection() {
       <section className="hero">
         <div className="hero-copy">
           <div className="section-header">
+            {projectId && (
+              <ProjectTabsBar
+                projectId={projectId}
+                licenseCount={projectLicenseCount}
+                activationCount={activationCount}
+                releaseCount={projectReleaseCount}
+              />
+            )}
             <div className="breadcrumb">
               <Link to="/">Projects</Link>
               <span>/</span>
@@ -696,35 +1148,19 @@ function OverviewSection() {
           </div>
           <p>Summary of licensing and release health for this project.</p>
         </div>
-        <div className="hero-panel">
-          <div className="panel-header">
-            <span>Status</span>
-            <span className="pill subtle">API</span>
-          </div>
-          <div className="panel-body">
-            <div className="meta-card">
-              <span className="meta-title">API Status</span>
-              <span className={`status ${status}`}>{statusLabel}</span>
-              <span className="meta-note">
-                {lastCheck ? lastCheck.toLocaleTimeString() : 'Not checked'}
-              </span>
-            </div>
-            <div className="meta-card">
-              <span className="meta-title">Latest Version</span>
-              <span className="meta-value">{latestVersion}</span>
-              <span className="meta-note">
-                {updateAvailable === null
-                  ? 'Unknown'
-                  : updateAvailable
-                    ? 'Update available'
-                    : 'Up to date'}
-              </span>
-            </div>
-          </div>
-        </div>
       </section>
 
       <section className="grid">
+        {latestRelease && (
+          <div className="card compact highlight">
+            <h2>Latest version</h2>
+            <p className="muted">Most recent published build.</p>
+            <div className="stat-line">
+              <span>Version</span>
+              <strong>{latestRelease.version}</strong>
+            </div>
+          </div>
+        )}
         <div className="card">
           <h2>Licenses</h2>
           <p className="muted">Active licenses and limits.</p>
@@ -748,19 +1184,36 @@ function OverviewSection() {
 
 function LicensesSection() {
   const { projectId } = useParams()
+  const { licenseCount: projectLicenseCount, activationCount, releaseCount } =
+    useOutletContext<ProjectNavContext>()
   const [licenses, setLicenses] = useState<License[]>([])
   const [activationCounts, setActivationCounts] = useState<Record<string, number>>({})
   const [plans, setPlans] = useState<Plan[]>([])
+  const [plansError, setPlansError] = useState<string | null>(null)
   const [licensePlan, setLicensePlan] = useState('basic')
   const [licenseMaxActivations, setLicenseMaxActivations] = useState(1)
   const [licenseDurationDays, setLicenseDurationDays] = useState('')
   const [licenseNotes, setLicenseNotes] = useState('')
   const [lastCreatedKey, setLastCreatedKey] = useState<string | null>(null)
+  const [bulkRecipients, setBulkRecipients] = useState('')
+  const [bulkPlan, setBulkPlan] = useState('basic')
+  const [bulkMaxActivations, setBulkMaxActivations] = useState(1)
+  const [bulkDurationDays, setBulkDurationDays] = useState('')
+  const [bulkNotes, setBulkNotes] = useState('')
+  const [bulkResult, setBulkResult] = useState<BulkCreateLicensesResponse | null>(null)
+  const [bulkMessage, setBulkMessage] = useState<string | null>(null)
+  const [bulkError, setBulkError] = useState<string | null>(null)
+  const [smtpVerified, setSmtpVerified] = useState(false)
+  const [smtpLoaded, setSmtpLoaded] = useState(false)
   const [licenseQuery, setLicenseQuery] = useState('')
   const [licenseStatus, setLicenseStatus] = useState<'all' | 'active' | 'revoked'>('all')
   const [licenseSort, setLicenseSort] = useState<'created_desc' | 'created_asc' | 'expires_asc' | 'expires_desc'>('created_desc')
   const [licensePage, setLicensePage] = useState(1)
   const [licensePageSize, setLicensePageSize] = useState(10)
+  const [expandedBulkGroups, setExpandedBulkGroups] = useState<Record<string, boolean>>({})
+  const [showCreateForm, setShowCreateForm] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth > 960))
+  const [showBulkForm, setShowBulkForm] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth > 960))
+  const [showLicenseFilters, setShowLicenseFilters] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth > 960))
   const navigate = useNavigate()
 
   const loadLicenses = async (id: string) => {
@@ -834,10 +1287,23 @@ function LicensesSection() {
     }
   }
 
+  const isExpired = (license: License) => {
+    if (!license.expires_at) return false
+    return new Date(license.expires_at).getTime() < Date.now()
+  }
+
+  const toggleBulkGroup = (label: string) => {
+    setExpandedBulkGroups((prev) => ({
+      ...prev,
+      [label]: !prev[label],
+    }))
+  }
+
   const loadPlans = async () => {
     try {
       const data = await fetchJson<Plan[]>(`${API_BASE}/plans`)
       setPlans(data)
+      setPlansError(null)
       if (data.length > 0) {
         const matched = data.find((plan) => plan.name === licensePlan)
         const selected = matched ?? data[0]
@@ -850,9 +1316,77 @@ function LicensesSection() {
             ? String(selected.duration_days_default)
             : '',
         )
+        const bulkMatched = data.find((plan) => plan.name === bulkPlan)
+        const bulkSelected = bulkMatched ?? selected
+        if (!bulkMatched) {
+          setBulkPlan(bulkSelected.name)
+        }
+        setBulkMaxActivations(bulkSelected.max_activations_default)
+        setBulkDurationDays(
+          bulkSelected.duration_days_default && bulkSelected.duration_days_default > 0
+            ? String(bulkSelected.duration_days_default)
+            : '',
+        )
       }
+    } catch (error) {
+      if (error instanceof Error) {
+        setPlansError(`Unable to load plans (${error.message}).`)
+        return
+      }
+      setPlansError('Unable to load plans.')
+    }
+  }
+
+  const loadSmtpStatus = async () => {
+    try {
+      const data = await fetchJson<SmtpSettings | null>(`${API_BASE}/smtp/settings`)
+      setSmtpVerified(Boolean(data?.verified))
+      setSmtpLoaded(true)
     } catch {
+      setSmtpVerified(false)
+      setSmtpLoaded(true)
+    }
+  }
+
+  const handleBulkCreate = async () => {
+    if (!projectId) return
+    const recipients = parseRecipients(bulkRecipients)
+    if (recipients.length === 0) {
+      setBulkError('Add at least one recipient email.')
       return
+    }
+    if (!smtpVerified) {
+      setBulkError('SMTP must be verified before sending licenses.')
+      return
+    }
+    const parsedMax = Number(bulkMaxActivations)
+    const payload = {
+      project_id: projectId,
+      plan: bulkPlan,
+      max_activations: Number.isNaN(parsedMax) ? 1 : parsedMax,
+      duration_days: bulkDurationDays ? Number(bulkDurationDays) : undefined,
+      notes: bulkNotes.trim() || undefined,
+      recipients,
+    }
+    setBulkError(null)
+    setBulkMessage(null)
+    try {
+      const response = await fetchJson<BulkCreateLicensesResponse>(`${API_BASE}/licenses/bulk`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      setBulkResult(response)
+      setBulkMessage(`Created ${response.created.length}, failed ${response.failed.length}.`)
+      setBulkRecipients('')
+      setBulkNotes('')
+      await loadLicenses(projectId)
+    } catch (error) {
+      if (error instanceof Error) {
+        setBulkError(`Unable to create licenses (${error.message}).`)
+        return
+      }
+      setBulkError('Unable to create licenses.')
     }
   }
 
@@ -860,14 +1394,29 @@ function LicensesSection() {
     if (!projectId) return
     void loadLicenses(projectId)
     void loadPlans()
+    if (!smtpLoaded) {
+      void loadSmtpStatus()
+    }
   }, [projectId])
+
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth > 960) {
+        setShowCreateForm(true)
+        setShowBulkForm(true)
+        setShowLicenseFilters(true)
+      }
+    }
+    window.addEventListener('resize', handleResize)
+    return () => window.removeEventListener('resize', handleResize)
+  }, [])
 
   if (!projectId) return null
 
   const normalizedQuery = licenseQuery.trim().toLowerCase()
   const filteredLicenses = useMemo(() => {
     const filtered = licenses.filter((license) => {
-      if (licenseStatus === 'active' && license.revoked) return false
+      if (licenseStatus === 'active' && (license.revoked || isExpired(license))) return false
       if (licenseStatus === 'revoked' && !license.revoked) return false
       if (!normalizedQuery) return true
       const haystack = [
@@ -898,11 +1447,47 @@ function LicensesSection() {
     return sorted
   }, [licenses, licenseStatus, normalizedQuery, licenseSort])
 
-  const totalLicenses = filteredLicenses.length
+  const singleLicenses = useMemo(
+    () => filteredLicenses.filter((license) => !license.bulk_created),
+    [filteredLicenses],
+  )
+  const bulkLicenses = useMemo(
+    () => filteredLicenses.filter((license) => license.bulk_created),
+    [filteredLicenses],
+  )
+  const bulkGroups = useMemo(() => {
+    const groups = new Map<string, License[]>()
+    bulkLicenses.forEach((license) => {
+      const label = license.notes?.trim() || 'Bulk batch'
+      const list = groups.get(label) ?? []
+      list.push(license)
+      groups.set(label, list)
+    })
+    return Array.from(groups.entries())
+      .map(([label, items]) => ({
+        label,
+        items: items.sort(
+          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
+        ),
+        latest: items.reduce((latest, item) => {
+          if (!latest) return item
+          return new Date(item.created_at).getTime() > new Date(latest.created_at).getTime()
+            ? item
+            : latest
+        }, null as License | null),
+      }))
+      .sort((a, b) => {
+        const aTime = a.latest ? new Date(a.latest.created_at).getTime() : 0
+        const bTime = b.latest ? new Date(b.latest.created_at).getTime() : 0
+        return bTime - aTime
+      })
+  }, [bulkLicenses])
+
+  const totalLicenses = singleLicenses.length
   const totalPages = Math.max(1, Math.ceil(totalLicenses / licensePageSize))
   const currentPage = Math.min(licensePage, totalPages)
   const pageStart = (currentPage - 1) * licensePageSize
-  const pagedLicenses = filteredLicenses.slice(pageStart, pageStart + licensePageSize)
+  const pagedLicenses = singleLicenses.slice(pageStart, pageStart + licensePageSize)
 
   useEffect(() => {
     if (licensePage > totalPages) {
@@ -923,11 +1508,47 @@ function LicensesSection() {
     }
   }
 
+  const handleBulkPlanChange = (value: string) => {
+    setBulkPlan(value)
+    const plan = plans.find((item) => item.name === value)
+    if (plan) {
+      setBulkMaxActivations(plan.max_activations_default)
+      setBulkDurationDays(
+        plan.duration_days_default && plan.duration_days_default > 0
+          ? String(plan.duration_days_default)
+          : '',
+      )
+    }
+  }
+
+  const parseRecipients = (value: string) =>
+    Array.from(
+      new Set(
+        value
+          .split(/[\s,;]+/)
+          .map((email) => email.trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    )
+
+  const bulkRecipientList = useMemo(
+    () => parseRecipients(bulkRecipients),
+    [bulkRecipients],
+  )
+
   return (
     <div className="page">
       <section className="hero">
         <div className="hero-copy">
           <div className="section-header">
+            {projectId && (
+              <ProjectTabsBar
+                projectId={projectId}
+                licenseCount={projectLicenseCount}
+                activationCount={activationCount}
+                releaseCount={releaseCount}
+              />
+            )}
             <div className="breadcrumb">
               <Link to="/">Projects</Link>
               <span>/</span>
@@ -949,8 +1570,16 @@ function LicensesSection() {
               <h2>Create license</h2>
               <span className="muted">Generate keys for this project.</span>
             </div>
+            <button
+              className="icon-button"
+              onClick={() => setShowCreateForm((prev) => !prev)}
+              aria-label="Toggle create license"
+              title="Toggle create license"
+            >
+              <i className={showCreateForm ? 'fa-solid fa-minus' : 'fa-solid fa-plus'} />
+            </button>
           </div>
-          <div className="form">
+          <div className={`form license-form collapse-body ${showCreateForm ? '' : 'is-collapsed'}`}>
             <label className="field">
               <span>Plan</span>
               <select value={licensePlan} onChange={(event) => handlePlanChange(event.target.value)}>
@@ -962,6 +1591,7 @@ function LicensesSection() {
                 ))}
               </select>
             </label>
+            {plansError && <div className="error">{plansError}</div>}
             <label className="field">
               <span>Max activations</span>
               <input
@@ -1005,17 +1635,122 @@ function LicensesSection() {
             )}
           </div>
         </div>
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <h2>Bulk licenses</h2>
+              <span className="muted">Create and email multiple licenses.</span>
+            </div>
+            <span className="status-line">
+              <span className={`status-dot ${smtpVerified ? 'ok' : 'offline'}`} />
+              <span>{smtpVerified ? 'SMTP verified' : 'SMTP required'}</span>
+            </span>
+            <button
+              className="icon-button"
+              onClick={() => setShowBulkForm((prev) => !prev)}
+              aria-label="Toggle bulk licenses"
+              title="Toggle bulk licenses"
+            >
+              <i className={showBulkForm ? 'fa-solid fa-minus' : 'fa-solid fa-plus'} />
+            </button>
+          </div>
+          <div className={`form bulk-license-form collapse-body ${showBulkForm ? '' : 'is-collapsed'}`}>
+            <label className="field full">
+              <span>Recipients</span>
+              <textarea
+                rows={4}
+                value={bulkRecipients}
+                onChange={(event) => setBulkRecipients(event.target.value)}
+                placeholder="one email per line, or comma-separated"
+              />
+              <span className="muted">{bulkRecipientList.length} recipients detected</span>
+            </label>
+            <label className="field">
+              <span>Plan</span>
+              <select value={bulkPlan} onChange={(event) => handleBulkPlanChange(event.target.value)}>
+                {plans.length === 0 && <option value="basic">basic</option>}
+                {plans.map((plan) => (
+                  <option key={plan.id} value={plan.name}>
+                    {plan.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Max activations</span>
+              <input
+                type="number"
+                min={0}
+                value={bulkMaxActivations}
+                onChange={(event) => setBulkMaxActivations(Number(event.target.value))}
+                placeholder="0 = unlimited"
+              />
+            </label>
+            <label className="field">
+              <span>Duration (days)</span>
+              <input
+                type="number"
+                min={1}
+                value={bulkDurationDays}
+                onChange={(event) => setBulkDurationDays(event.target.value)}
+                placeholder="Leave empty for unlimited"
+              />
+            </label>
+            <label className="field">
+              <span>Notes</span>
+              <input
+                type="text"
+                value={bulkNotes}
+                onChange={(event) => setBulkNotes(event.target.value)}
+                placeholder="Optional batch note"
+              />
+            </label>
+            {!smtpVerified && smtpLoaded && (
+              <div className="notice warn">Verify SMTP settings before sending licenses.</div>
+            )}
+            <button
+              className="primary"
+              onClick={handleBulkCreate}
+              disabled={!smtpVerified || bulkRecipientList.length === 0}
+            >
+              Create & send licenses
+            </button>
+            {bulkError && <div className="error">{bulkError}</div>}
+            {bulkMessage && <div className="notice">{bulkMessage}</div>}
+            {bulkResult?.failed.length ? (
+              <div className="bulk-result">
+                <span className="muted">Failed recipients</span>
+                <div className="bulk-list">
+                  {bulkResult.failed.map((item) => (
+                    <div key={item.email} className="bulk-row">
+                      <span>{item.email}</span>
+                      <span className="muted">{item.error}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
         <div className="card span-2">
           <div className="card-header">
             <div>
               <h2>Issued licenses</h2>
-              <span className="muted">Open a license to inspect activations.</span>
+              <span className="muted">Single licenses and bulk batches.</span>
             </div>
-            <button className="ghost" onClick={() => loadLicenses(projectId)}>
-              Reload
-            </button>
+            <div className="card-actions">
+              <button
+                className="ghost collapse-toggle"
+                onClick={() => setShowLicenseFilters((prev) => !prev)}
+              >
+                {showLicenseFilters ? 'Hide filters' : 'Show filters'}
+              </button>
+              <button className="ghost" onClick={() => loadLicenses(projectId)}>
+                Reload
+              </button>
+            </div>
           </div>
-          <div className="toolbar">
+          <div className={`toolbar license-toolbar compact-toolbar collapse-body ${showLicenseFilters ? '' : 'is-collapsed'}`}>
             <div className="toolbar-row">
               <label className="field">
                 <span>Search</span>
@@ -1073,7 +1808,7 @@ function LicensesSection() {
             <div className="toolbar-row">
               <span className="muted">
                 Showing {Math.min(pageStart + 1, totalLicenses)}-
-                {Math.min(pageStart + pagedLicenses.length, totalLicenses)} of {totalLicenses}
+                {Math.min(pageStart + pagedLicenses.length, totalLicenses)} of {totalLicenses} single licenses
               </span>
               <div className="pagination">
                 <button
@@ -1096,6 +1831,75 @@ function LicensesSection() {
               </div>
             </div>
           </div>
+          <div className="bulk-license-groups">
+            <div className="bulk-license-header">
+              <h3>Bulk batches</h3>
+              <span className="muted">{bulkLicenses.length} licenses</span>
+            </div>
+            {bulkGroups.length === 0 ? (
+              <div className="empty">No bulk licenses yet.</div>
+            ) : (
+              bulkGroups.map((group) => {
+                const expanded = Boolean(expandedBulkGroups[group.label])
+                return (
+                  <div key={group.label} className="bulk-group">
+                    <button className="ghost bulk-group-toggle" onClick={() => toggleBulkGroup(group.label)}>
+                      <span className="bulk-group-title">{group.label}</span>
+                      <span className="muted">{group.items.length} licenses</span>
+                      <span className="bulk-group-chevron">{expanded ? '-' : '+'}</span>
+                    </button>
+                    {expanded && (
+                      <div className="bulk-group-body">
+                        <div className="table-row table-header bulk-row">
+                          <span>ID</span>
+                          <span>Plan</span>
+                          <span>Usage</span>
+                          <span>Status</span>
+                          <span>Created</span>
+                          <span>Expires</span>
+                          <span>Actions</span>
+                        </div>
+                        {group.items.map((license) => (
+                          <div key={license.license_id} className="table-row bulk-row">
+                            <span data-label="ID">{license.license_id.slice(0, 8)}...</span>
+                            <span data-label="Plan">{license.plan}</span>
+                            <span data-label="Usage">
+                              {(activationCounts[license.license_id] ?? 0)}/
+                              {license.max_activations === 0 ? 'Unlimited' : license.max_activations}
+                            </span>
+                            <span data-label="Status" className={isExpired(license) ? 'status-expired' : undefined}>
+                              {license.revoked ? 'Revoked' : isExpired(license) ? 'Expired' : 'Active'}
+                            </span>
+                            <span data-label="Created">{new Date(license.created_at).toLocaleDateString()}</span>
+                            <span data-label="Expires">
+                              {license.expires_at ? new Date(license.expires_at).toLocaleDateString() : 'Unlimited'}
+                            </span>
+                            <div className="row-actions" data-label="Actions">
+                              <button
+                                className="ghost"
+                                onClick={() => navigate(`/projects/${projectId}/activations?license=${license.license_id}`)}
+                              >
+                                <i className="fa-solid fa-wave-square mobile-only" aria-hidden="true" />
+                                <span className="desktop-only">Activations</span>
+                              </button>
+                              <button
+                                className="ghost danger"
+                                onClick={() => handleRevokeLicense(license.license_id)}
+                                disabled={isExpired(license)}
+                              >
+                                <i className="fa-solid fa-ban mobile-only" aria-hidden="true" />
+                                <span className="desktop-only">Revoke</span>
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })
+            )}
+          </div>
           <div className="table">
             <div className="table-row table-header license-row">
               <span>ID</span>
@@ -1111,33 +1915,38 @@ function LicensesSection() {
               <div key={license.license_id} className="table-row license-row">
                 <span>{license.license_id.slice(0, 8)}...</span>
                 <span>{license.plan}</span>
-                <span>
-                  {(activationCounts[license.license_id] ?? 0)}/
-                  {license.max_activations === 0 ? '∞' : license.max_activations}
+                <span data-label="Usage">
+                              {(activationCounts[license.license_id] ?? 0)}/
+                  {license.max_activations === 0 ? 'Unlimited' : license.max_activations}
                 </span>
-                <span>{license.notes || '-'}</span>
-                <span>{license.revoked ? 'Revoked' : 'Active'}</span>
+                <span data-label="Notes">{license.notes || '-'}</span>
+                <span className={isExpired(license) ? 'status-expired' : undefined}>
+                  {license.revoked ? 'Revoked' : isExpired(license) ? 'Expired' : 'Active'}
+                </span>
                 <span>{new Date(license.created_at).toLocaleDateString()}</span>
-                <span>
-                  {license.expires_at ? new Date(license.expires_at).toLocaleDateString() : 'Unlimited'}
+                <span data-label="Expires">
+                              {license.expires_at ? new Date(license.expires_at).toLocaleDateString() : 'Unlimited'}
                 </span>
-                <div className="row-actions">
+                <div className="row-actions" data-label="Actions">
                   <button
                     className="ghost"
                     onClick={() => navigate(`/projects/${projectId}/activations?license=${license.license_id}`)}
                   >
-                    Activations
+                    <i className="fa-solid fa-wave-square mobile-only" aria-hidden="true" />
+                    <span className="desktop-only">Activations</span>
                   </button>
                   <button
                     className="ghost danger"
                     onClick={() => handleRevokeLicense(license.license_id)}
+                    disabled={isExpired(license)}
                   >
-                    Revoke
+                    <i className="fa-solid fa-ban mobile-only" aria-hidden="true" />
+                    <span className="desktop-only">Revoke</span>
                   </button>
                 </div>
               </div>
             ))}
-            {pagedLicenses.length === 0 && <div className="empty">No licenses yet.</div>}
+            {pagedLicenses.length === 0 && <div className="empty">No single licenses yet.</div>}
           </div>
         </div>
       </section>
@@ -1146,6 +1955,8 @@ function LicensesSection() {
 }
 function ActivationsSection() {
   const { projectId } = useParams()
+  const { licenseCount, activationCount, releaseCount } =
+    useOutletContext<ProjectNavContext>()
   const [licenses, setLicenses] = useState<License[]>([])
   const [activations, setActivations] = useState<Activation[]>([])
   const [selectedLicenseId, setSelectedLicenseId] = useState<string>('')
@@ -1237,6 +2048,14 @@ function ActivationsSection() {
       <section className="hero">
         <div className="hero-copy">
           <div className="section-header">
+            {projectId && (
+              <ProjectTabsBar
+                projectId={projectId}
+                licenseCount={licenseCount}
+                activationCount={activationCount}
+                releaseCount={releaseCount}
+              />
+            )}
             <div className="breadcrumb">
               <Link to="/">Projects</Link>
               <span>/</span>
@@ -1393,6 +2212,8 @@ function ActivationsSection() {
 
 function ReleasesSection() {
   const { projectId } = useParams()
+  const { licenseCount, activationCount, releaseCount } =
+    useOutletContext<ProjectNavContext>()
   const [releases, setReleases] = useState<Release[]>([])
   const [releaseVersion, setReleaseVersion] = useState('')
   const [releaseChannel, setReleaseChannel] = useState('stable')
@@ -1513,6 +2334,14 @@ function ReleasesSection() {
       <section className="hero">
         <div className="hero-copy">
           <div className="section-header">
+            {projectId && (
+              <ProjectTabsBar
+                projectId={projectId}
+                licenseCount={licenseCount}
+                activationCount={activationCount}
+                releaseCount={releaseCount}
+              />
+            )}
             <div className="breadcrumb">
               <Link to="/">Projects</Link>
               <span>/</span>
@@ -1703,6 +2532,8 @@ function ReleasesSection() {
 
 function ReleaseDetailSection() {
   const { projectId, releaseId } = useParams()
+  const { licenseCount, activationCount, releaseCount } =
+    useOutletContext<ProjectNavContext>()
   const [release, setRelease] = useState<Release | null>(null)
   const [promoteChannel, setPromoteChannel] = useState<'stable' | 'beta' | 'hotfix'>('stable')
   const [error, setError] = useState<string | null>(null)
@@ -1754,6 +2585,14 @@ function ReleaseDetailSection() {
       <section className="hero">
         <div className="hero-copy">
           <div className="section-header">
+            {projectId && (
+              <ProjectTabsBar
+                projectId={projectId}
+                licenseCount={licenseCount}
+                activationCount={activationCount}
+                releaseCount={releaseCount}
+              />
+            )}
             <div className="breadcrumb">
               <Link to="/">Projects</Link>
               <span>/</span>
@@ -1869,11 +2708,23 @@ function ReleaseDetailSection() {
 }
 
 function SettingsSection() {
+  const location = useLocation()
+  const activeSettings =
+    location.hash === '#user-profile'
+      ? 'user'
+      : location.hash === '#smtp'
+        ? 'smtp'
+        : 'plans'
   const [profile, setProfile] = useState<UserProfile | null>(null)
   const [profileName, setProfileName] = useState('')
   const [profileEmail, setProfileEmail] = useState('')
   const [profilePassword, setProfilePassword] = useState('')
   const [profileMessage, setProfileMessage] = useState<string | null>(null)
+  const [inviteName, setInviteName] = useState('')
+  const [inviteEmail, setInviteEmail] = useState('')
+  const [inviteRole, setInviteRole] = useState<'user' | 'admin'>('user')
+  const [inviteMessage, setInviteMessage] = useState<string | null>(null)
+  const [inviteError, setInviteError] = useState<string | null>(null)
 
   const [plans, setPlans] = useState<Plan[]>([])
   const [planName, setPlanName] = useState('')
@@ -1883,6 +2734,21 @@ function SettingsSection() {
   const [planChannels, setPlanChannels] = useState<string[]>(['stable'])
   const [selectedPlanId, setSelectedPlanId] = useState<string>('')
   const [planMessage, setPlanMessage] = useState<string | null>(null)
+
+  const [smtpHost, setSmtpHost] = useState('')
+  const [smtpPort, setSmtpPort] = useState('587')
+  const [smtpUsername, setSmtpUsername] = useState('')
+  const [smtpPassword, setSmtpPassword] = useState('')
+  const [smtpFromEmail, setSmtpFromEmail] = useState('')
+  const [smtpFromName, setSmtpFromName] = useState('')
+  const [smtpSecure, setSmtpSecure] = useState(false)
+  const [smtpHasPassword, setSmtpHasPassword] = useState(false)
+  const [smtpVerified, setSmtpVerified] = useState(false)
+  const [smtpVerifiedAt, setSmtpVerifiedAt] = useState<string | null>(null)
+  const [smtpCode, setSmtpCode] = useState('')
+  const [smtpMessage, setSmtpMessage] = useState<string | null>(null)
+  const [smtpError, setSmtpError] = useState<string | null>(null)
+  const [smtpLoaded, setSmtpLoaded] = useState(false)
 
   const channels = ['stable', 'beta', 'hotfix']
 
@@ -1991,10 +2857,141 @@ function SettingsSection() {
     )
   }
 
+  const handleCreateUser = async () => {
+    setInviteMessage(null)
+    setInviteError(null)
+    try {
+      const payload = {
+        name: inviteName.trim() || undefined,
+        email: inviteEmail.trim(),
+        role: inviteRole,
+      }
+      const data = await fetchJson<{ invite_expires_at: string }>(`${API_BASE}/auth/users`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      setInviteName('')
+      setInviteEmail('')
+      setInviteRole('user')
+      setInviteMessage(`Invite sent. Expires ${new Date(data.invite_expires_at).toLocaleString()}.`)
+    } catch (error) {
+      if (error instanceof Error) {
+        setInviteError(`Unable to add user (${error.message}).`)
+        return
+      }
+      setInviteError('Unable to add user.')
+    }
+  }
+
+  const loadSmtp = async () => {
+    try {
+      const data = await fetchJson<SmtpSettings | null>(`${API_BASE}/smtp/settings`)
+      if (!data) {
+        setSmtpHost('')
+        setSmtpPort('587')
+        setSmtpUsername('')
+        setSmtpFromEmail('')
+        setSmtpFromName('')
+        setSmtpSecure(false)
+        setSmtpHasPassword(false)
+        setSmtpVerified(false)
+        setSmtpVerifiedAt(null)
+      } else {
+        setSmtpHost(data.host)
+        setSmtpPort(String(data.port))
+        setSmtpUsername(data.username)
+        setSmtpFromEmail(data.from_email)
+        setSmtpFromName(data.from_name ?? '')
+        setSmtpSecure(Boolean(data.secure))
+        setSmtpHasPassword(Boolean(data.has_password))
+        setSmtpVerified(Boolean(data.verified))
+        setSmtpVerifiedAt(data.verified_at ?? null)
+      }
+      setSmtpError(null)
+      setSmtpLoaded(true)
+    } catch (error) {
+      if (error instanceof Error) {
+        setSmtpError(`Unable to load SMTP settings (${error.message}).`)
+      } else {
+        setSmtpError('Unable to load SMTP settings.')
+      }
+    }
+  }
+
+  const handleSaveSmtp = async (sendTest: boolean) => {
+    setSmtpMessage(null)
+    setSmtpError(null)
+    const payload = {
+      host: smtpHost.trim(),
+      port: Number(smtpPort),
+      username: smtpUsername.trim(),
+      password: smtpPassword.trim() || undefined,
+      from_email: smtpFromEmail.trim(),
+      from_name: smtpFromName.trim() || undefined,
+      secure: smtpSecure,
+    }
+    try {
+      await fetchJson<SmtpSettings>(`${API_BASE}/smtp/settings`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      })
+      setSmtpPassword('')
+      setSmtpHasPassword(true)
+      setSmtpVerified(false)
+      setSmtpVerifiedAt(null)
+      if (sendTest) {
+        await fetchJson<{ sent: boolean }>(`${API_BASE}/smtp/test`, {
+          method: 'POST',
+        })
+        setSmtpMessage('Settings saved. Verification code sent to admin.')
+      } else {
+        setSmtpMessage('SMTP settings saved.')
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        setSmtpError(`Unable to save SMTP settings (${error.message}).`)
+        return
+      }
+      setSmtpError('Unable to save SMTP settings.')
+    }
+  }
+
+  const handleVerifySmtp = async () => {
+    setSmtpMessage(null)
+    setSmtpError(null)
+    try {
+      const res = await fetchJson<{ verified: boolean }>(`${API_BASE}/smtp/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: smtpCode.trim() }),
+      })
+      if (res.verified) {
+        setSmtpVerified(true)
+        setSmtpVerifiedAt(new Date().toISOString())
+        setSmtpCode('')
+        setSmtpMessage('SMTP verified.')
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        setSmtpError(`Unable to verify SMTP (${error.message}).`)
+        return
+      }
+      setSmtpError('Unable to verify SMTP.')
+    }
+  }
+
   useEffect(() => {
     void loadProfile()
     void loadPlans()
   }, [])
+
+  useEffect(() => {
+    if (activeSettings !== 'smtp') return
+    if (smtpLoaded) return
+    void loadSmtp()
+  }, [activeSettings, smtpLoaded])
 
   useEffect(() => {
     const selected = plans.find((plan) => plan.id === selectedPlanId)
@@ -2024,149 +3021,279 @@ function SettingsSection() {
         </div>
       </section>
 
-      <section className="grid">
-        <div className="card">
-          <div className="card-header">
-            <div>
-              <h2>User profile</h2>
-              <span className="muted">Signed in as {profile?.role ?? 'user'}.</span>
+      <section className={`grid settings-grid ${activeSettings !== 'user' ? 'single' : ''}`}>
+        {activeSettings === 'user' && (
+          <div className="card" id="user-profile">
+            <div className="card-header">
+              <div>
+                <h2>User profile</h2>
+                <span className="muted">Signed in as {profile?.role ?? 'user'}.</span>
+              </div>
             </div>
+            <div className="form">
+              <label className="field">
+                <span>Name</span>
+                <input value={profileName} onChange={(event) => setProfileName(event.target.value)} />
+              </label>
+              <label className="field">
+                <span>Email</span>
+                <input value={profileEmail} onChange={(event) => setProfileEmail(event.target.value)} />
+              </label>
+              <label className="field">
+                <span>New password</span>
+                <input
+                  type="password"
+                  value={profilePassword}
+                  onChange={(event) => setProfilePassword(event.target.value)}
+                  placeholder="Leave blank to keep"
+                />
+              </label>
+              <button className="primary" onClick={handleSaveProfile}>
+                Save profile
+              </button>
+              {profileMessage && <div className="notice">{profileMessage}</div>}
+            </div>
+            {profile?.role === 'admin' && (
+              <div className="form invite-form">
+              <div className="subsection-title">
+                <h3>Add user</h3>
+                <span className="muted">Send a one-hour invite with a temporary password.</span>
+              </div>
+                <label className="field">
+                  <span>Name</span>
+                  <input
+                    value={inviteName}
+                    onChange={(event) => setInviteName(event.target.value)}
+                    placeholder="New user"
+                  />
+                </label>
+                <label className="field">
+                  <span>Email</span>
+                  <input
+                    value={inviteEmail}
+                    onChange={(event) => setInviteEmail(event.target.value)}
+                    placeholder="user@example.com"
+                  />
+                </label>
+                <label className="field">
+                  <span>Role</span>
+                  <select
+                    value={inviteRole}
+                    onChange={(event) => setInviteRole(event.target.value as 'user' | 'admin')}
+                  >
+                    <option value="user">User</option>
+                    <option value="admin">Admin</option>
+                  </select>
+                </label>
+                <button className="primary" onClick={handleCreateUser} disabled={!inviteEmail.trim()}>
+                  Send invite
+                </button>
+                {inviteError && <div className="error">{inviteError}</div>}
+                {inviteMessage && <div className="notice">{inviteMessage}</div>}
+              </div>
+            )}
           </div>
-          <div className="form">
-            <label className="field">
-              <span>Name</span>
-              <input value={profileName} onChange={(event) => setProfileName(event.target.value)} />
-            </label>
-            <label className="field">
-              <span>Email</span>
-              <input value={profileEmail} onChange={(event) => setProfileEmail(event.target.value)} />
-            </label>
-            <label className="field">
-              <span>New password</span>
-              <input
-                type="password"
-                value={profilePassword}
-                onChange={(event) => setProfilePassword(event.target.value)}
-                placeholder="Leave blank to keep"
-              />
-            </label>
-            <button className="primary" onClick={handleSaveProfile}>
-              Save profile
-            </button>
-            {profileMessage && <div className="notice">{profileMessage}</div>}
-          </div>
-        </div>
+        )}
 
-        <div className="card span-2">
-          <div className="card-header">
-            <div>
-              <h2>Plans</h2>
-              <span className="muted">Customize licensing tiers and rules.</span>
+        {activeSettings === 'plans' && (
+          <div className="card span-2" id="plans">
+            <div className="card-header">
+              <div>
+                <h2>Plans</h2>
+                <span className="muted">Customize licensing tiers and rules.</span>
+              </div>
             </div>
-          </div>
-          <div className="plan-grid">
-            <div className="plan-form">
-              <label className="field">
-                <span>Select plan</span>
-                <select
-                  value={selectedPlanId}
-                  onChange={(event) => setSelectedPlanId(event.target.value)}
-                >
-                  <option value="">New plan</option>
-                  {plans.map((plan) => (
-                    <option key={plan.id} value={plan.id}>
-                      {plan.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
-                <span>Plan name</span>
-                <input value={planName} onChange={(event) => setPlanName(event.target.value)} />
-              </label>
-              <label className="field">
-                <span>Max activations</span>
-                <input
-                  type="number"
-                  min={0}
-                  value={planMax}
-                  onChange={(event) => setPlanMax(event.target.value)}
-                  placeholder="0 = unlimited"
-                />
-              </label>
-              <label className="field">
-                <span>Grace period (days)</span>
-                <input
-                  type="number"
-                  value={planGrace}
-                  onChange={(event) => setPlanGrace(event.target.value)}
-                />
-              </label>
-              <label className="field">
-                <span>License duration (days)</span>
-                <input
-                  type="number"
-                  value={planDuration}
-                  onChange={(event) => setPlanDuration(event.target.value)}
-                  placeholder="0 = unlimited"
-                />
-              </label>
-              <div className="field">
-                <span>Allowed channels</span>
-                <div className="chip-row">
-                  {channels.map((channel) => (
-                    <button
-                      key={channel}
-                      className={`chip ${planChannels.includes(channel) ? 'active' : ''}`}
-                      onClick={() => toggleChannel(channel)}
-                      type="button"
-                    >
-                      {channel}
-                    </button>
-                  ))}
+            <div className="plan-grid">
+              <div className="plan-form">
+                <label className="field">
+                  <span>Select plan</span>
+                  <select
+                    value={selectedPlanId}
+                    onChange={(event) => setSelectedPlanId(event.target.value)}
+                  >
+                    <option value="">New plan</option>
+                    {plans.map((plan) => (
+                      <option key={plan.id} value={plan.id}>
+                        {plan.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Plan name</span>
+                  <input value={planName} onChange={(event) => setPlanName(event.target.value)} />
+                </label>
+                <label className="field">
+                  <span>Max activations</span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={planMax}
+                    onChange={(event) => setPlanMax(event.target.value)}
+                    placeholder="0 = unlimited"
+                  />
+                </label>
+                <label className="field">
+                  <span>Grace period (days)</span>
+                  <input
+                    type="number"
+                    value={planGrace}
+                    onChange={(event) => setPlanGrace(event.target.value)}
+                  />
+                </label>
+                <label className="field">
+                  <span>License duration (days)</span>
+                  <input
+                    type="number"
+                    value={planDuration}
+                    onChange={(event) => setPlanDuration(event.target.value)}
+                    placeholder="0 = unlimited"
+                  />
+                </label>
+                <div className="field">
+                  <span>Allowed channels</span>
+                  <div className="chip-row">
+                    {channels.map((channel) => (
+                      <button
+                        key={channel}
+                        className={`chip ${planChannels.includes(channel) ? 'active' : ''}`}
+                        onClick={() => toggleChannel(channel)}
+                        type="button"
+                      >
+                        {channel}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
-              <div className="row-actions">
-                <button className="primary" onClick={handleCreatePlan}>
-                  Create
-                </button>
-                <button className="ghost" onClick={handleUpdatePlan}>
-                  Update
-                </button>
-              </div>
-              {planMessage && <div className="notice">{planMessage}</div>}
-            </div>
-            <div className="plan-list">
-              {plans.map((plan) => (
-                <div key={plan.id} className="plan-card">
-                  <div>
-                    <strong>{plan.name}</strong>
-                    <span className="muted">
-                      Channels: {plan.allowed_channels.join(', ')}
-                    </span>
-                  </div>
-                  <div className="plan-meta">
-                    <span>
-                      {plan.max_activations_default === 0
-                        ? 'Unlimited devices'
-                        : `${plan.max_activations_default} devices`}
-                    </span>
-                    <span>{plan.grace_period_days} days grace</span>
-                    <span>
-                      {plan.duration_days_default && plan.duration_days_default > 0
-                        ? `${plan.duration_days_default} days duration`
-                        : 'No expiry'}
-                    </span>
-                  </div>
-                  <button className="ghost danger" onClick={() => handleDeletePlan(plan.id)}>
-                    Delete
+                <div className="row-actions">
+                  <button className="primary" onClick={handleCreatePlan}>
+                    Create
+                  </button>
+                  <button className="ghost" onClick={handleUpdatePlan}>
+                    Update
                   </button>
                 </div>
-              ))}
-              {plans.length === 0 && <div className="empty">No plans yet.</div>}
+                {planMessage && <div className="notice">{planMessage}</div>}
+              </div>
+              <div className="plan-list">
+                {plans.map((plan) => (
+                  <div key={plan.id} className="plan-card">
+                    <div>
+                      <strong>{plan.name}</strong>
+                      <span className="muted">
+                        Channels: {plan.allowed_channels.join(', ')}
+                      </span>
+                    </div>
+                    <div className="plan-meta">
+                      <span>
+                        {plan.max_activations_default === 0
+                          ? 'Unlimited devices'
+                          : `${plan.max_activations_default} devices`}
+                      </span>
+                      <span>{plan.grace_period_days} days grace</span>
+                      <span>
+                        {plan.duration_days_default && plan.duration_days_default > 0
+                          ? `${plan.duration_days_default} days duration`
+                          : 'No expiry'}
+                      </span>
+                    </div>
+                    <button className="ghost danger" onClick={() => handleDeletePlan(plan.id)}>
+                      Delete
+                    </button>
+                  </div>
+                ))}
+                {plans.length === 0 && <div className="empty">No plans yet.</div>}
+              </div>
             </div>
           </div>
-        </div>
+        )}
+
+        {activeSettings === 'smtp' && (
+          <div className="card span-2" id="smtp">
+            <div className="card-header">
+              <div>
+                <h2>SMTP settings</h2>
+                <span className="muted">Configure outbound email delivery.</span>
+              </div>
+            </div>
+            <div className="form">
+              <div className="status-indicator">
+                <span className={`status-dot ${smtpVerified ? 'ok' : 'offline'}`} />
+                <span>{smtpVerified ? 'Verified' : 'Not verified'}</span>
+                {smtpVerifiedAt && (
+                  <span className="muted">Verified {new Date(smtpVerifiedAt).toLocaleString()}</span>
+                )}
+              </div>
+              <label className="field">
+                <span>SMTP host</span>
+                <input value={smtpHost} onChange={(event) => setSmtpHost(event.target.value)} />
+              </label>
+              <label className="field">
+                <span>SMTP port</span>
+                <input
+                  type="number"
+                  min={1}
+                  value={smtpPort}
+                  onChange={(event) => setSmtpPort(event.target.value)}
+                />
+              </label>
+              <label className="field">
+                <span>Username</span>
+                <input value={smtpUsername} onChange={(event) => setSmtpUsername(event.target.value)} />
+              </label>
+              <label className="field">
+                <span>Password</span>
+                <input
+                  type="password"
+                  value={smtpPassword}
+                  onChange={(event) => setSmtpPassword(event.target.value)}
+                  placeholder={smtpHasPassword ? 'Saved (enter to replace)' : ''}
+                />
+              </label>
+              <label className="field">
+                <span>From email</span>
+                <input value={smtpFromEmail} onChange={(event) => setSmtpFromEmail(event.target.value)} />
+              </label>
+              <label className="field">
+                <span>From name</span>
+                <input value={smtpFromName} onChange={(event) => setSmtpFromName(event.target.value)} />
+              </label>
+              <label className="field">
+                <span>Secure (TLS)</span>
+                <select
+                  value={smtpSecure ? 'true' : 'false'}
+                  onChange={(event) => setSmtpSecure(event.target.value === 'true')}
+                >
+                  <option value="false">STARTTLS</option>
+                  <option value="true">SSL/TLS</option>
+                </select>
+              </label>
+              <div className="row-actions">
+                <button className="primary" onClick={() => handleSaveSmtp(true)}>
+                  Save & send test
+                </button>
+                <button className="ghost" onClick={() => handleSaveSmtp(false)}>
+                  Save only
+                </button>
+              </div>
+              {!smtpVerified && (
+                <div className="field-inline">
+                  <input
+                    type="text"
+                    value={smtpCode}
+                    onChange={(event) => setSmtpCode(event.target.value)}
+                    placeholder="Verification code"
+                  />
+                  <button className="ghost" onClick={handleVerifySmtp} disabled={!smtpCode.trim()}>
+                    Verify
+                  </button>
+                </div>
+              )}
+              {smtpError && <div className="error">{smtpError}</div>}
+              {smtpMessage && <div className="notice">{smtpMessage}</div>}
+            </div>
+          </div>
+        )}
       </section>
     </div>
   )
@@ -2175,20 +3302,28 @@ function SettingsSection() {
 function App() {
   return (
     <BrowserRouter>
-      <LoginGate>
-        <Routes>
-          <Route path="/" element={<ProjectsHome />} />
-          <Route path="/settings" element={<SettingsSection />} />
-          <Route path="/projects/:projectId" element={<ProjectLayout />}>
-            <Route index element={<Navigate to="overview" replace />} />
-            <Route path="overview" element={<OverviewSection />} />
-            <Route path="licenses" element={<LicensesSection />} />
-            <Route path="activations" element={<ActivationsSection />} />
-            <Route path="releases" element={<ReleasesSection />} />
-            <Route path="releases/:releaseId" element={<ReleaseDetailSection />} />
-          </Route>
-        </Routes>
-      </LoginGate>
+      <Routes>
+        <Route path="/invite" element={<InviteAccept />} />
+        <Route
+          path="/*"
+          element={
+            <LoginGate>
+              <Routes>
+                <Route path="/" element={<ProjectsHome />} />
+                <Route path="/settings" element={<SettingsSection />} />
+                <Route path="/projects/:projectId" element={<ProjectLayout />}>
+                  <Route index element={<Navigate to="overview" replace />} />
+                  <Route path="overview" element={<OverviewSection />} />
+                  <Route path="licenses" element={<LicensesSection />} />
+                  <Route path="activations" element={<ActivationsSection />} />
+                  <Route path="releases" element={<ReleasesSection />} />
+                  <Route path="releases/:releaseId" element={<ReleaseDetailSection />} />
+                </Route>
+              </Routes>
+            </LoginGate>
+          }
+        />
+      </Routes>
     </BrowserRouter>
   )
 }

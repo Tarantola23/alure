@@ -2,16 +2,37 @@ import { BadRequestException, Injectable, UnauthorizedException } from '@nestjs/
 import { PrismaService } from '../prisma/prisma.service';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { createHash, randomBytes } from 'crypto';
 import {
+  AcceptInviteRequestDto,
+  AcceptInviteResponseDto,
   BootstrapRequestDto,
+  CreateUserRequestDto,
+  CreateUserResponseDto,
   LoginRequestDto,
   UpdateProfileDto,
   UserProfileDto,
 } from './auth.types';
+import { SmtpService } from '../smtp/smtp.service';
 
 @Injectable()
 export class AuthService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly smtpService: SmtpService,
+  ) {}
+
+  private hashToken(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
+  }
+
+  private generatePassword(): string {
+    return randomBytes(6).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 10);
+  }
+
+  private getDashboardUrl(): string {
+    return process.env.DASHBOARD_URL || 'http://localhost:5173';
+  }
 
   async ensureDefaultAdmin(): Promise<void> {
     if (process.env.AUTO_CREATE_ADMIN !== 'true') {
@@ -127,5 +148,75 @@ export class AuthService {
       name: user.name,
       role: user.role,
     };
+  }
+
+  async createUserInvite(body: CreateUserRequestDto): Promise<CreateUserResponseDto> {
+    const email = body.email.trim().toLowerCase();
+    const existing = await this.prisma.user.findUnique({ where: { email } });
+    if (existing) {
+      throw new BadRequestException('user_exists');
+    }
+
+    await this.smtpService.assertVerified();
+
+    const tempPassword = this.generatePassword();
+    const passwordHash = await bcrypt.hash(tempPassword, 10);
+    const user = await this.prisma.user.create({
+      data: {
+        email,
+        name: body.name?.trim() || 'User',
+        passwordHash,
+        role: body.role?.trim() || 'user',
+      },
+    });
+
+    const token = randomBytes(24).toString('hex');
+    const tokenHash = this.hashToken(token);
+    const expiresAt = new Date(Date.now() + 60 * 60 * 1000);
+    await this.prisma.userInvite.create({
+      data: {
+        userId: user.id,
+        tokenHash,
+        expiresAt,
+      },
+    });
+
+    const inviteUrl = `${this.getDashboardUrl()}/invite?token=${token}`;
+    await this.smtpService.sendInviteEmail({
+      toEmail: user.email,
+      name: user.name,
+      temporaryPassword: tempPassword,
+      inviteUrl,
+      expiresAt,
+    });
+
+    return {
+      user_id: user.id,
+      email: user.email,
+      invite_expires_at: expiresAt.toISOString(),
+    };
+  }
+
+  async acceptInvite(body: AcceptInviteRequestDto): Promise<AcceptInviteResponseDto> {
+    const tokenHash = this.hashToken(body.token);
+    const invite = await this.prisma.userInvite.findUnique({ where: { tokenHash }, include: { user: true } });
+    if (!invite || invite.usedAt) {
+      throw new BadRequestException('invalid_invite');
+    }
+    if (invite.expiresAt < new Date()) {
+      throw new BadRequestException('invite_expired');
+    }
+    const passwordHash = await bcrypt.hash(body.password, 10);
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: invite.userId },
+        data: { passwordHash },
+      }),
+      this.prisma.userInvite.update({
+        where: { id: invite.id },
+        data: { usedAt: new Date() },
+      }),
+    ]);
+    return { accepted: true };
   }
 }

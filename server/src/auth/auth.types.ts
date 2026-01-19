@@ -72,3 +72,50 @@ export class UpdateProfileDto {
   @MinLength(4)
   password?: string;
 }
+
+export class CreateUserRequestDto {
+  @ApiProperty({ example: 'user@example.com' })
+  @IsEmail()
+  email: string;
+
+  @ApiPropertyOptional({ example: 'New User' })
+  @IsString()
+  @IsOptional()
+  name?: string;
+
+  @ApiPropertyOptional({ example: 'user' })
+  @IsString()
+  @IsOptional()
+  role?: string;
+}
+
+export class CreateUserResponseDto {
+  @ApiProperty()
+  @IsString()
+  user_id: string;
+
+  @ApiProperty()
+  @IsString()
+  email: string;
+
+  @ApiProperty()
+  @IsString()
+  invite_expires_at: string;
+}
+
+export class AcceptInviteRequestDto {
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  token: string;
+
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  password: string;
+}
+
+export class AcceptInviteResponseDto {
+  @ApiProperty()
+  accepted: boolean;
+}

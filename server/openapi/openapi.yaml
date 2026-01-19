@@ -10,6 +10,7 @@ tags:
   - name: projects
   - name: plans
   - name: updates
+  - name: smtp
 paths:
   /auth/login:
     post:
@@ -178,6 +179,25 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/CreateLicenseResponse'
+  /licenses/bulk:
+    post:
+      tags: [licensing]
+      summary: Create multiple licenses and email recipients
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/BulkCreateLicensesRequest'
+      responses:
+        '200':
+          description: Bulk license result
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/BulkCreateLicensesResponse'
   /licenses/{license_id}/activations:
     get:
       tags: [licensing]
@@ -496,6 +516,69 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/DownloadTokenResponse'
+  /smtp/settings:
+    get:
+      tags: [smtp]
+      summary: Get SMTP settings
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: SMTP settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SmtpSettings'
+    put:
+      tags: [smtp]
+      summary: Update SMTP settings
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateSmtpSettings'
+      responses:
+        '200':
+          description: Updated SMTP settings
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SmtpSettings'
+  /smtp/test:
+    post:
+      tags: [smtp]
+      summary: Send a test email to the admin user
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Test email sent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestEmailResponse'
+  /smtp/verify:
+    post:
+      tags: [smtp]
+      summary: Verify SMTP settings using a code
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VerifySmtpCode'
+      responses:
+        '200':
+          description: SMTP verified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VerifySmtpResponse'
   /updates/download/{asset_id}:
     get:
       tags: [updates]
@@ -624,6 +707,59 @@ components:
           type: string
         license_key:
           type: string
+    BulkCreateLicensesRequest:
+      type: object
+      required: [project_id, plan, max_activations, recipients]
+      properties:
+        project_id:
+          type: string
+        plan:
+          type: string
+        max_activations:
+          type: integer
+          minimum: 0
+        duration_days:
+          type: integer
+        notes:
+          type: string
+        recipients:
+          type: array
+          items:
+            type: string
+    BulkCreateLicenseItem:
+      type: object
+      required: [email, license_id, license_key]
+      properties:
+        email:
+          type: string
+        license_id:
+          type: string
+        license_key:
+          type: string
+    BulkCreateLicenseError:
+      type: object
+      required: [email, error]
+      properties:
+        email:
+          type: string
+        error:
+          type: string
+        license_id:
+          type: string
+        license_key:
+          type: string
+    BulkCreateLicensesResponse:
+      type: object
+      required: [created, failed]
+      properties:
+        created:
+          type: array
+          items:
+            $ref: '#/components/schemas/BulkCreateLicenseItem'
+        failed:
+          type: array
+          items:
+            $ref: '#/components/schemas/BulkCreateLicenseError'
     LicenseListItem:
       type: object
       required: [license_id, project_id, plan, max_activations, revoked, created_at]
@@ -916,3 +1052,62 @@ components:
           type: integer
         duration_days_default:
           type: integer
+    SmtpSettings:
+      type: object
+      required: [host, port, username, from_email, secure, has_password, verified]
+      properties:
+        host:
+          type: string
+        port:
+          type: integer
+        username:
+          type: string
+        from_email:
+          type: string
+        from_name:
+          type: string
+        secure:
+          type: boolean
+        has_password:
+          type: boolean
+        verified:
+          type: boolean
+        verified_at:
+          type: string
+          format: date-time
+    UpdateSmtpSettings:
+      type: object
+      required: [host, port, username, from_email, secure]
+      properties:
+        host:
+          type: string
+        port:
+          type: integer
+        username:
+          type: string
+        password:
+          type: string
+        from_email:
+          type: string
+        from_name:
+          type: string
+        secure:
+          type: boolean
+    TestEmailResponse:
+      type: object
+      required: [sent]
+      properties:
+        sent:
+          type: boolean
+    VerifySmtpCode:
+      type: object
+      required: [code]
+      properties:
+        code:
+          type: string
+    VerifySmtpResponse:
+      type: object
+      required: [verified]
+      properties:
+        verified:
+          type: boolean

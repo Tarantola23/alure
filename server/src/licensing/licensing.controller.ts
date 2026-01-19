@@ -1,10 +1,13 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { ApiParam, ApiQuery, ApiTags } from '@nestjs/swagger';
+import { AuthGuard } from '../auth/auth.guard';
 import { LicensingService } from './licensing.service';
 import {
   ActivateRequestDto,
   ActivateResponseDto,
   ActivationListItemDto,
+  BulkCreateLicensesRequestDto,
+  BulkCreateLicensesResponseDto,
   CreateLicenseRequestDto,
   CreateLicenseResponseDto,
   LicenseListItemDto,
@@ -43,6 +46,15 @@ export class LicensingController {
   @Post()
   async createLicense(@Body() body: CreateLicenseRequestDto): Promise<CreateLicenseResponseDto> {
     return this.licensingService.createLicense(body);
+  }
+
+  @UseGuards(AuthGuard)
+  @Post('bulk')
+  async bulkCreate(@Req() req: { user?: { role: string } }, @Body() body: BulkCreateLicensesRequestDto): Promise<BulkCreateLicensesResponseDto> {
+    if (req.user?.role !== 'admin') {
+      throw new ForbiddenException('admin_only');
+    }
+    return this.licensingService.createBulkLicenses(body);
   }
 
   @Get(':licenseId/activations')

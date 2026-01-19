@@ -2,6 +2,7 @@ import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { createHash } from 'crypto';
 import { createReadStream } from 'fs';
 import { stat } from 'fs/promises';
+import { unlink } from 'fs/promises';
 import { PrismaService } from '../prisma/prisma.service';
 import {
   CreateProjectRequestDto,
@@ -12,6 +13,7 @@ import {
 } from './projects.types';
 import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
 import type { $Enums } from '@prisma/client';
+import { uploadToGcs } from '../storage/storage';
 type UploadedReleaseFile = {
   path: string;
   originalname: string;
@@ -173,6 +175,13 @@ export class ProjectsService {
     }
     const fileStats = await stat(file.path);
     const sha256 = await this.hashFile(file.path);
+    const filename = file.path.split(/[\\/]/).pop() || file.originalname;
+    const storagePath = process.env.GCS_BUCKET
+      ? await uploadToGcs(file.path, filename, file.mimetype)
+      : file.path;
+    if (process.env.GCS_BUCKET) {
+      await unlink(file.path);
+    }
     const release = await this.prisma.release.create({
       data: {
         projectId,
@@ -185,7 +194,7 @@ export class ProjectsService {
             sizeBytes: fileStats.size,
             sha256,
             downloadUrl: '',
-            storagePath: file.path,
+            storagePath,
             contentType: file.mimetype,
           },
         },

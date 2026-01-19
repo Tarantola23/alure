@@ -75,7 +75,7 @@ def print_expiry(client: AlureClient) -> None:
 
 def main() -> None:
     client = AlureClient(
-        base_url="https://alure-api-ceckp66sva-ey.a.run.app/api/v1",
+        base_url="https://api.alure.it/api/v1",
         storage=FileStorage("./.alure-client"),
     )
 

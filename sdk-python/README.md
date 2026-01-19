@@ -19,10 +19,7 @@ pip install -e .
 pip install alure-sdk
 ```
 
-## Pubblicazione su PyPI
-Prerequisiti:
-- Accesso a PyPI (account: `tarantola23`).
-- Token API PyPI salvato in ambiente (`TWINE_USERNAME=__token__`, `TWINE_PASSWORD=<token>`).
+
 
 Build e upload:
 ```

@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Alure icon">
+  <defs>
+    <style>
+      .accent { stroke: #2c6f7c; fill: none; stroke-width: 28; stroke-linecap: round; stroke-linejoin: round; }
+      .strong { fill: #1f5663; }
+      .soft { fill: #e6eef2; }
+    </style>
+  </defs>
+  <rect width="512" height="512" rx="96" class="soft"/>
+  <g transform="translate(56 56)">
+    <g transform="rotate(-28 200 200)">
+      <circle cx="152" cy="210" r="44" class="accent"/>
+      <circle cx="152" cy="210" r="12" class="strong"/>
+      <rect x="240" y="182" width="70" height="40" rx="8" class="accent"/>
+      <rect x="252" y="194" width="46" height="8" rx="4" class="strong"/>
+      <rect x="252" y="206" width="46" height="8" rx="4" class="strong"/>
+      <path class="accent" d="M196 210h170"/>
+      <path class="accent" d="M314 210v34"/>
+      <path class="accent" d="M346 210v18"/>
+      <path class="accent" d="M360 210v26"/>
+    </g>
+    <path class="accent" d="M112 336c38 44 110 58 166 28 24-12 44-30 60-54"/>
+    <path class="accent" d="M354 292l28 30-40 6z"/>
+  </g>
+</svg>

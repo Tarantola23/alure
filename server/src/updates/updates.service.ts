@@ -10,6 +10,7 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { LicensingService } from '../licensing/licensing.service';
 import { DownloadTokenResponseDto } from './updates.types';
+import { downloadFromGcs, isGcsPath } from '../storage/storage';
 
 @Injectable()
 export class UpdatesService {
@@ -68,7 +69,17 @@ export class UpdatesService {
     if (!asset || !asset.storagePath) {
       throw new HttpException('asset_not_found', HttpStatus.NOT_FOUND);
     }
-    const buffer = await readFile(asset.storagePath);
+    let buffer: Buffer;
+    try {
+      buffer = isGcsPath(asset.storagePath)
+        ? await downloadFromGcs(asset.storagePath)
+        : await readFile(asset.storagePath);
+    } catch (error: any) {
+      if (error?.code === 404 || error?.code === 'ENOENT') {
+        throw new HttpException('asset_not_found', HttpStatus.NOT_FOUND);
+      }
+      throw error;
+    }
     return {
       filename: asset.filename,
       buffer,

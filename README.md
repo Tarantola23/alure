@@ -5,11 +5,13 @@ Alure is an open source, self-hosted platform for desktop software licensing and
 
 ## Features (EN)
 - Multi-project management with plans (Basic/Pro/Enterprise), activation limits, revocation, and notes.
+- Bulk license creation with email delivery (SMTP) and recipient hashing.
 - Signed activation receipts for offline-first validation with configurable grace period.
 - Update channels (stable/beta/hotfix), release promotion/rollback, and asset checksums (SHA256).
 - Version check endpoint can be public, while downloads are protected via auth or download token.
 - API is versioned (`/api/v1`) and designed for CI/CD usage.
 - SDKs for Python and Rust implement the same licensing and update rules.
+- Admin SMTP settings and invite-only user provisioning (one-hour invite link).
 
 ## Architecture (EN)
 - API: NestJS (TypeScript) with Prisma ORM.
@@ -62,9 +64,14 @@ Optional:
 - `GCS_BUCKET` and `GCS_PREFIX` for persistent asset storage on GCS.
 - `SWAGGER_ENABLED=true` to expose `/api` docs.
 - `CORS_ORIGINS` (comma-separated) to restrict dashboard origins.
+- `SMTP_ENCRYPTION_KEY` to encrypt SMTP passwords (fallbacks to `JWT_SECRET`).
+- `DASHBOARD_URL` for invite links (defaults to `http://localhost:5173`).
 
 ## Production Notes (EN)
 Cloud Run filesystem is ephemeral. Use `GCS_BUCKET` to persist release assets. After enabling GCS, re-upload assets so `storagePath` becomes `gs://...`.
+
+## Changelog (EN)
+See `CHANGELOG.md` for dated release notes.
 
 ---
 
@@ -73,11 +80,13 @@ Alure e una piattaforma open source e self-hosted per licensing e distribuzione 
 
 ## Funzionalita (IT)
 - Gestione multi-progetto con piani, limiti attivazioni, revoca e note.
+- Creazione licenze bulk con invio email (SMTP) e hash destinatari.
 - Receipt firmati per verifica offline-first con grace period configurabile.
 - Canali update (stable/beta/hotfix), promozione/rollback e checksum SHA256.
 - Check versione pubblico e download protetto tramite token o JWT.
 - API versionata (`/api/v1`) pronta per integrazione CI/CD.
 - SDK Python e Rust allineati alla stessa logica di licensing e update.
+- Configurazione SMTP e invito utenti con link valido 1 ora.
 
 ## Architettura (IT)
 - API: NestJS (TypeScript) con Prisma.
@@ -125,9 +134,14 @@ Opzionali:
 - `GCS_BUCKET`, `GCS_PREFIX` per asset persistenti su GCS.
 - `SWAGGER_ENABLED=true` per la documentazione `/api`.
 - `CORS_ORIGINS` per limitare gli origin della dashboard.
+- `SMTP_ENCRYPTION_KEY` per cifrare le password SMTP (fallback su `JWT_SECRET`).
+- `DASHBOARD_URL` per i link di invito (default `http://localhost:5173`).
 
 ## Note produzione (IT)
 Il filesystem di Cloud Run non e persistente. In produzione usa `GCS_BUCKET` per gli asset. Dopo aver abilitato GCS, ricarica gli asset per ottenere `storagePath` con `gs://...`.
+
+## Changelog (IT)
+Consulta `CHANGELOG.md` per le note di rilascio con data.
 
 ## License
 TBD. Recommended: Apache-2.0 or AGPL-3.0 depending on your distribution needs.
