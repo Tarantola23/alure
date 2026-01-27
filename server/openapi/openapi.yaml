@@ -1,4 +1,4 @@
-openapi: 3.0.3
+﻿openapi: 3.0.3
 info:
   title: Alure API
   version: 0.1.0
@@ -87,6 +87,92 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UserProfile'
+  /auth/users:
+    get:
+      tags: [auth]
+      summary: List users (admin only)
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Users list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/UserListItem'
+    post:
+      tags: [auth]
+      summary: Create a user invite (admin only)
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateUserRequest'
+      responses:
+        '200':
+          description: Invite created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateUserResponse'
+  /auth/users/{userId}/resend:
+    post:
+      tags: [auth]
+      summary: Resend a user invite (admin only)
+      security:
+        - bearerAuth: []
+      parameters:
+        - name: userId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Invite resent
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ResendInviteResponse'
+  /auth/invite/accept:
+    post:
+      tags: [auth]
+      summary: Accept an invite and set a password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AcceptInviteRequest'
+      responses:
+        '200':
+          description: Invite accepted
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AcceptInviteResponse'
+  /auth/invite/status:
+    get:
+      tags: [auth]
+      summary: Check invite status
+      parameters:
+        - name: token
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Invite status
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/InviteStatusResponse'
   /licenses/activate:
     post:
       tags: [licensing]
@@ -217,6 +303,122 @@ paths:
                 type: array
                 items:
                   $ref: '#/components/schemas/ActivationListItem'
+  /licenses/{license_id}/modules:
+    get:
+      tags: [licensing]
+      summary: List modules for a license
+      parameters:
+        - in: path
+          name: license_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: License modules
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LicenseModulesResponse'
+    post:
+      tags: [licensing]
+      summary: Update modules enabled for a license
+      parameters:
+        - in: path
+          name: license_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateLicenseModulesRequest'
+      responses:
+        '200':
+          description: Updated license modules
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LicenseModulesResponse'
+  /licenses/{license_id}/activations/{activation_id}/modules:
+    get:
+      tags: [licensing]
+      summary: List modules for an activation
+      parameters:
+        - in: path
+          name: license_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: activation_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Activation modules
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivationModulesResponse'
+    post:
+      tags: [licensing]
+      summary: Update modules enabled for an activation
+      parameters:
+        - in: path
+          name: license_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: activation_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateActivationModulesRequest'
+      responses:
+        '200':
+          description: Updated activation modules
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ActivationModulesResponse'
+  /licenses/{license_id}/activations/{activation_id}/hostname:
+    post:
+      tags: [licensing]
+      summary: Reveal activation hostname (requires password)
+      parameters:
+        - in: path
+          name: license_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: activation_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RevealActivationHostnameRequest'
+      responses:
+        '200':
+          description: Hostname
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevealActivationHostnameResponse'
   /projects:
     get:
       tags: [projects]
@@ -253,6 +455,116 @@ paths:
       parameters:
         - in: path
           name: project_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Delete result
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: boolean
+  /projects/{project_id}/overview:
+    get:
+      tags: [projects]
+      summary: Project overview stats
+      parameters:
+        - in: path
+          name: project_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Overview stats
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectOverview'
+  /projects/{project_id}/modules:
+    get:
+      tags: [projects]
+      summary: List modules for a project
+      parameters:
+        - in: path
+          name: project_id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Project modules
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/ProjectModule'
+    post:
+      tags: [projects]
+      summary: Create a module for a project
+      parameters:
+        - in: path
+          name: project_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateProjectModuleRequest'
+      responses:
+        '200':
+          description: Project module
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectModule'
+  /projects/{project_id}/modules/{module_id}:
+    put:
+      tags: [projects]
+      summary: Update a project module
+      parameters:
+        - in: path
+          name: project_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: module_id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateProjectModuleRequest'
+      responses:
+        '200':
+          description: Project module
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ProjectModule'
+    delete:
+      tags: [projects]
+      summary: Delete a project module
+      parameters:
+        - in: path
+          name: project_id
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: module_id
           required: true
           schema:
             type: string
@@ -699,6 +1011,10 @@ components:
           type: integer
         notes:
           type: string
+        module_keys:
+          type: array
+          items:
+            type: string
     CreateLicenseResponse:
       type: object
       required: [license_id, license_key]
@@ -723,6 +1039,10 @@ components:
         notes:
           type: string
         recipients:
+          type: array
+          items:
+            type: string
+        module_keys:
           type: array
           items:
             type: string
@@ -798,6 +1118,100 @@ components:
         created_at:
           type: string
           format: date-time
+        last_seen_at:
+          type: string
+          format: date-time
+        hostname_masked:
+          type: string
+    ActivationModuleItem:
+      type: object
+      required: [module_id, key, name, enabled]
+      properties:
+        module_id:
+          type: string
+        key:
+          type: string
+        name:
+          type: string
+        enabled:
+          type: boolean
+        force_activation:
+          type: boolean
+        force_deactivation:
+          type: boolean
+        params:
+          type: object
+          additionalProperties: true
+    ActivationModulesResponse:
+      type: object
+      required: [modules]
+      properties:
+        modules:
+          type: array
+          items:
+            $ref: '#/components/schemas/ActivationModuleItem'
+    UpdateActivationModulesRequest:
+      type: object
+      required: [module_keys]
+      properties:
+        module_keys:
+          type: array
+          items:
+            type: string
+    RevealActivationHostnameRequest:
+      type: object
+      required: [password]
+      properties:
+        password:
+          type: string
+    RevealActivationHostnameResponse:
+      type: object
+      properties:
+        hostname:
+          type: string
+    LicenseModuleItem:
+      type: object
+      required: [module_id, key, name, enabled]
+      properties:
+        module_id:
+          type: string
+        key:
+          type: string
+        name:
+          type: string
+        enabled:
+          type: boolean
+        force_activation:
+          type: boolean
+        force_deactivation:
+          type: boolean
+        params:
+          type: object
+          additionalProperties: true
+    LicenseModulesResponse:
+      type: object
+      required: [modules]
+      properties:
+        modules:
+          type: array
+          items:
+            $ref: '#/components/schemas/LicenseModuleItem'
+    UpdateLicenseModulesRequest:
+      type: object
+      required: [modules]
+      properties:
+        modules:
+          type: array
+          items:
+            type: object
+            required: [key]
+            properties:
+              key:
+                type: string
+              force_activation:
+                type: boolean
+              force_deactivation:
+                type: boolean
     CreateProjectRequest:
       type: object
       required: [name]
@@ -818,6 +1232,110 @@ components:
         updated_at:
           type: string
           format: date-time
+    ProjectOverview:
+      type: object
+      required: [licenses, releases, activations, modules]
+      properties:
+        licenses:
+          $ref: '#/components/schemas/ProjectOverviewLicenses'
+        releases:
+          $ref: '#/components/schemas/ProjectOverviewReleases'
+        activations:
+          $ref: '#/components/schemas/ProjectOverviewActivations'
+        modules:
+          $ref: '#/components/schemas/ProjectOverviewModules'
+    ProjectOverviewLicenses:
+      type: object
+      required: [total, active, revoked, expired, avg_usage_percent]
+      properties:
+        total:
+          type: integer
+        active:
+          type: integer
+        revoked:
+          type: integer
+        expired:
+          type: integer
+        avg_usage_percent:
+          type: integer
+    ProjectOverviewReleases:
+      type: object
+      required: [total]
+      properties:
+        total:
+          type: integer
+        latest_version:
+          type: string
+        latest_channel:
+          type: string
+        latest_published_at:
+          type: string
+          format: date-time
+    ProjectOverviewActivations:
+      type: object
+      required: [total, active, revoked]
+      properties:
+        total:
+          type: integer
+        active:
+          type: integer
+        revoked:
+          type: integer
+    ProjectOverviewModules:
+      type: object
+      required: [total, active_in_licenses, forced_on, forced_off, used_in_activations]
+      properties:
+        total:
+          type: integer
+        active_in_licenses:
+          type: integer
+        forced_on:
+          type: integer
+        forced_off:
+          type: integer
+        used_in_activations:
+          type: integer
+    ProjectModule:
+      type: object
+      required: [id, key, name, created_at]
+      properties:
+        id:
+          type: string
+        key:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        params:
+          type: object
+          additionalProperties: true
+        created_at:
+          type: string
+          format: date-time
+    CreateProjectModuleRequest:
+      type: object
+      required: [key, name]
+      properties:
+        key:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        params:
+          type: object
+          additionalProperties: true
+    UpdateProjectModuleRequest:
+      type: object
+      properties:
+        name:
+          type: string
+        description:
+          type: string
+        params:
+          type: object
+          additionalProperties: true
     CreateReleaseRequest:
       type: object
       required: [version, channel]
@@ -978,6 +1496,77 @@ components:
           type: string
         password:
           type: string
+    CreateUserRequest:
+      type: object
+      required: [email]
+      properties:
+        email:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+    CreateUserResponse:
+      type: object
+      required: [user_id, email, invite_expires_at]
+      properties:
+        user_id:
+          type: string
+        email:
+          type: string
+        invite_expires_at:
+          type: string
+          format: date-time
+    AcceptInviteRequest:
+      type: object
+      required: [token, otp, password]
+      properties:
+        token:
+          type: string
+        otp:
+          type: string
+        password:
+          type: string
+    AcceptInviteResponse:
+      type: object
+      required: [accepted]
+      properties:
+        accepted:
+          type: boolean
+    InviteStatusResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          enum: [valid, expired, used, invalid]
+    UserListItem:
+      type: object
+      required: [user_id, email, name, role, invite_status]
+      properties:
+        user_id:
+          type: string
+        email:
+          type: string
+        name:
+          type: string
+        role:
+          type: string
+        invite_status:
+          type: string
+          enum: [accepted, pending, expired]
+        invite_expires_at:
+          type: string
+          format: date-time
+    ResendInviteResponse:
+      type: object
+      required: [user_id, invite_expires_at]
+      properties:
+        user_id:
+          type: string
+        invite_expires_at:
+          type: string
+          format: date-time
     BootstrapStatus:
       type: object
       required: [has_admin]

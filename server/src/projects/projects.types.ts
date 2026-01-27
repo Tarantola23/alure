@@ -1,7 +1,8 @@
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsNotEmpty, IsOptional, IsString } from 'class-validator';
+﻿import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsIn, IsNotEmpty, IsObject, IsOptional, IsString } from 'class-validator';
 
 const CHANNELS = ['stable', 'beta', 'hotfix'] as const;
+const RELEASE_STATUSES = ['draft', 'published', 'deprecated'] as const;
 
 export class CreateProjectRequestDto {
   @ApiProperty({ example: 'Desktop Suite' })
@@ -34,11 +35,17 @@ export class CreateReleaseRequestDto {
   @IsNotEmpty()
   version: string;
 
-  @ApiProperty({ enum: CHANNELS, example: 'stable' })
+  @ApiPropertyOptional({ enum: CHANNELS, example: 'stable' })
   @IsString()
-  @IsNotEmpty()
+  @IsOptional()
   @IsIn(CHANNELS)
-  channel: string;
+  channel?: string;
+
+  @ApiPropertyOptional({ enum: RELEASE_STATUSES, example: 'published' })
+  @IsString()
+  @IsOptional()
+  @IsIn(RELEASE_STATUSES)
+  status?: string;
 
   @ApiPropertyOptional({ example: 'Initial release' })
   @IsString()
@@ -69,13 +76,19 @@ export class ReleaseListItemDto {
   @IsString()
   version: string;
 
-  @ApiProperty({ enum: CHANNELS })
+  @ApiPropertyOptional({ enum: CHANNELS })
   @IsString()
-  channel: string;
+  @IsOptional()
+  channel?: string;
 
-  @ApiProperty()
+  @ApiPropertyOptional()
   @IsString()
-  published_at: string;
+  @IsOptional()
+  published_at?: string;
+
+  @ApiProperty({ enum: RELEASE_STATUSES })
+  @IsString()
+  status: string;
 
   @ApiPropertyOptional()
   @IsString()
@@ -102,9 +115,180 @@ export class ReleaseListItemDto {
 }
 
 export class PromoteReleaseRequestDto {
-  @ApiProperty({ enum: CHANNELS, example: 'stable' })
+  @ApiPropertyOptional({ enum: CHANNELS, example: 'stable' })
+  @IsString()
+  @IsOptional()
+  @IsIn(CHANNELS)
+  channel?: string;
+
+  @ApiPropertyOptional({ enum: RELEASE_STATUSES, example: 'published' })
+  @IsString()
+  @IsOptional()
+  @IsIn(RELEASE_STATUSES)
+  status?: string;
+}
+
+export class ProjectModuleDto {
+  @ApiProperty()
+  @IsString()
+  id: string;
+
+  @ApiProperty()
+  @IsString()
+  key: string;
+
+  @ApiProperty()
+  @IsString()
+  name: string;
+
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  description?: string;
+
+  @ApiPropertyOptional({ type: Object })
+  @IsObject()
+  @IsOptional()
+  params?: Record<string, string>;
+
+  @ApiProperty()
+  @IsString()
+  created_at: string;
+}
+
+export class CreateProjectModuleRequestDto {
+  @ApiProperty({ example: 'telemetry' })
   @IsString()
   @IsNotEmpty()
-  @IsIn(CHANNELS)
-  channel: string;
+  key: string;
+
+  @ApiProperty({ example: 'Telemetry' })
+  @IsString()
+  @IsNotEmpty()
+  name: string;
+
+  @ApiPropertyOptional({ example: 'Usage tracking toggle' })
+  @IsString()
+  @IsOptional()
+  description?: string;
+
+  @ApiPropertyOptional({ type: Object })
+  @IsObject()
+  @IsOptional()
+  params?: Record<string, string>;
 }
+
+export class UpdateProjectModuleRequestDto {
+  @ApiPropertyOptional({ example: 'Telemetry' })
+  @IsString()
+  @IsOptional()
+  name?: string;
+
+  @ApiPropertyOptional({ example: 'Usage tracking toggle' })
+  @IsString()
+  @IsOptional()
+  description?: string;
+
+  @ApiPropertyOptional({ type: Object })
+  @IsObject()
+  @IsOptional()
+  params?: Record<string, string>;
+}
+
+export class ProjectOverviewLicensesDto {
+  @ApiProperty()
+  total: number;
+
+  @ApiProperty()
+  active: number;
+
+  @ApiProperty()
+  revoked: number;
+
+  @ApiProperty()
+  expired: number;
+
+  @ApiProperty()
+  avg_usage_percent: number;
+}
+
+export class ProjectOverviewReleasesDto {
+  @ApiProperty()
+  total: number;
+
+  @ApiProperty()
+  published: number;
+
+  @ApiProperty()
+  draft: number;
+
+  @ApiProperty()
+  deprecated: number;
+
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  latest_version?: string;
+
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  latest_channel?: string;
+
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  latest_published_at?: string;
+}
+
+export class ProjectOverviewActivationsDto {
+  @ApiProperty()
+  total: number;
+
+  @ApiProperty()
+  active: number;
+
+  @ApiProperty()
+  revoked: number;
+}
+
+export class ProjectOverviewModulesDto {
+  @ApiProperty()
+  total: number;
+
+  @ApiProperty()
+  active_in_licenses: number;
+
+  @ApiProperty()
+  forced_on: number;
+
+  @ApiProperty()
+  forced_off: number;
+
+  @ApiProperty()
+  used_in_activations: number;
+}
+
+export class ProjectOverviewDto {
+  @ApiProperty({ type: ProjectOverviewLicensesDto })
+  @IsObject()
+  licenses: ProjectOverviewLicensesDto;
+
+  @ApiProperty({ type: ProjectOverviewReleasesDto })
+  @IsObject()
+  releases: ProjectOverviewReleasesDto;
+
+  @ApiProperty({ type: ProjectOverviewActivationsDto })
+  @IsObject()
+  activations: ProjectOverviewActivationsDto;
+
+  @ApiProperty({ type: ProjectOverviewModulesDto })
+  @IsObject()
+  modules: ProjectOverviewModulesDto;
+}
+
+
+
+
+
+

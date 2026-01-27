@@ -1,4 +1,4 @@
-
+﻿
 import { useEffect, useMemo, useState } from 'react'
 import {
   BrowserRouter,
@@ -42,9 +42,10 @@ type License = {
 type Release = {
   id: string
   version: string
-  channel: string
+  channel?: string
+  status: string
   notes?: string
-  published_at: string
+  published_at?: string
   asset?: {
     id: string
     filename: string
@@ -57,8 +58,10 @@ type Release = {
 type Activation = {
   activation_id: string
   device_id_hash: string
+  hostname_masked?: string
   revoked: boolean
   created_at: string
+  last_seen_at?: string
 }
 
 type Plan = {
@@ -111,6 +114,64 @@ type BulkCreateLicenseError = {
 type BulkCreateLicensesResponse = {
   created: BulkCreateLicenseItem[]
   failed: BulkCreateLicenseError[]
+}
+
+type ProjectModule = {
+  id: string
+  key: string
+  name: string
+  description?: string
+  params?: Record<string, string>
+  created_at: string
+}
+
+type ActivationModuleItem = {
+  module_id: string
+  key: string
+  name: string
+  enabled: boolean
+  force_activation?: boolean
+  force_deactivation?: boolean
+  params?: Record<string, string>
+}
+
+type LicenseModuleItem = {
+  module_id: string
+  key: string
+  name: string
+  enabled: boolean
+  force_activation?: boolean
+  force_deactivation?: boolean
+  params?: Record<string, string>
+}
+
+type ProjectOverviewStats = {
+  licenses: {
+    total: number
+    active: number
+    revoked: number
+    expired: number
+    avg_usage_percent: number
+  }
+  releases: {
+    total: number
+    published: number
+    draft: number
+    deprecated: number
+    latest_version?: string
+    latest_channel?: string
+    latest_published_at?: string
+  }
+  modules: {
+    total: number
+    active_in_licenses: number
+    forced_on: number
+    forced_off: number
+    used_in_activations: number
+  }
+  activations: {
+    total: number
+  }
 }
 
 const STORAGE_KEY = 'alure_auth'
@@ -708,7 +769,7 @@ function AppShell({
           </div>
         )}
         <div className="sidebar-footer">
-          <span>Dashboard v{DASHBOARD_VERSION} · Creato internamente con AI</span>
+          <span>Dashboard v{DASHBOARD_VERSION} - Creato internamente con AI</span>
         </div>
       </aside>
       <main className="app-main">
@@ -1032,22 +1093,10 @@ function ProjectLayout() {
   useEffect(() => {
     if (!projectId) return
     const loadCounts = async () => {
-      const [licenses, releases] = await Promise.all([
-        fetchJson<License[]>(`${API_BASE}/licenses?project_id=${projectId}`),
-        fetchJson<Release[]>(`${API_BASE}/projects/${projectId}/releases`),
-      ])
-      setLicenseCount(licenses.length)
-      setReleaseCount(releases.length)
-      if (licenses.length === 0) {
-        setActivationCount(0)
-        return
-      }
-      const activationLists = await Promise.all(
-        licenses.map((license) =>
-          fetchJson<Activation[]>(`${API_BASE}/licenses/${license.license_id}/activations`),
-        ),
-      )
-      setActivationCount(activationLists.reduce((sum, list) => sum + list.length, 0))
+      const data = await fetchJson<ProjectOverviewStats>(`${API_BASE}/projects/${projectId}/overview`)
+      setLicenseCount(data.licenses.total)
+      setReleaseCount(data.releases.total)
+      setActivationCount(data.activations.total)
     }
     void loadCounts()
   }, [projectId])
@@ -1079,6 +1128,7 @@ function ProjectTabsBar({
   return (
     <nav className="project-tabs">
       <NavLink to={`/projects/${projectId}/overview`}>Overview</NavLink>
+      <NavLink to={`/projects/${projectId}/modules`}>Modules</NavLink>
       <NavLink to={`/projects/${projectId}/licenses`}>
         Licenses <span className="nav-badge">{licenseCount}</span>
       </NavLink>
@@ -1095,33 +1145,69 @@ function OverviewSection() {
   const { projectId } = useParams()
   const { licenseCount: projectLicenseCount, activationCount, releaseCount: projectReleaseCount } =
     useOutletContext<ProjectNavContext>()
-  const [latestRelease, setLatestRelease] = useState<Release | null>(null)
   const [licenseCount, setLicenseCount] = useState(0)
   const [releaseCount, setReleaseCount] = useState(0)
+  const [licenseStats, setLicenseStats] = useState({
+    active: 0,
+    revoked: 0,
+    expired: 0,
+    avgUsage: 0,
+  })
+  const [releaseStats, setReleaseStats] = useState({
+    latestVersion: 'n/a',
+    channel: 'n/a',
+    publishedAt: 'n/a',
+    publishedCount: 0,
+    draftCount: 0,
+    deprecatedCount: 0,
+  })
+  const [moduleStats, setModuleStats] = useState({
+    total: 0,
+    activeInLicenses: 0,
+    forcedOn: 0,
+    forcedOff: 0,
+    usedInActivations: 0,
+  })
 
   useEffect(() => {
     if (!projectId) return
-    const loadCounts = async () => {
-      const [licenses, releases] = await Promise.all([
-        fetchJson<License[]>(`${API_BASE}/licenses?project_id=${projectId}`),
-        fetchJson<Release[]>(`${API_BASE}/projects/${projectId}/releases`),
-      ])
-      setLicenseCount(licenses.length)
-      setReleaseCount(releases.length)
-      if (releases.length === 0) {
-        setLatestRelease(null)
-        return
-      }
-      const latest = releases.reduce((acc, release) => {
-        if (!acc) return release
-        return new Date(release.published_at) > new Date(acc.published_at) ? release : acc
-      }, releases[0] as Release | null)
-      setLatestRelease(latest)
+    const loadOverview = async () => {
+      const data = await fetchJson<ProjectOverviewStats>(`${API_BASE}/projects/${projectId}/overview`)
+      setLicenseCount(data.licenses.total)
+      setReleaseCount(data.releases.total)
+      setLicenseStats({
+        active: data.licenses.active,
+        revoked: data.licenses.revoked,
+        expired: data.licenses.expired,
+        avgUsage: data.licenses.avg_usage_percent,
+      })
+      setReleaseStats({
+        latestVersion: data.releases.latest_version ?? 'n/a',
+        channel: data.releases.latest_channel ?? 'n/a',
+        publishedAt: data.releases.latest_published_at ?? 'n/a',
+        publishedCount: data.releases.published,
+        draftCount: data.releases.draft,
+        deprecatedCount: data.releases.deprecated,
+      })
+      setModuleStats({
+        total: data.modules.total,
+        activeInLicenses: data.modules.active_in_licenses,
+        forcedOn: data.modules.forced_on,
+        forcedOff: data.modules.forced_off,
+        usedInActivations: data.modules.used_in_activations,
+      })
     }
-    void loadCounts()
+    void loadOverview()
   }, [projectId])
 
   if (!projectId) return null
+
+  const formatDate = (value?: string) => {
+    if (!value) return 'n/a'
+    const parsed = new Date(value)
+    if (Number.isNaN(parsed.getTime())) return 'n/a'
+    return parsed.toLocaleDateString()
+  }
 
   return (
     <div className="page">
@@ -1151,37 +1237,319 @@ function OverviewSection() {
       </section>
 
       <section className="grid">
-        {latestRelease && (
-          <div className="card compact highlight">
-            <h2>Latest version</h2>
-            <p className="muted">Most recent published build.</p>
-            <div className="stat-line">
-              <span>Version</span>
-              <strong>{latestRelease.version}</strong>
-            </div>
-          </div>
-        )}
         <div className="card">
           <h2>Licenses</h2>
-          <p className="muted">Active licenses and limits.</p>
+          <p className="muted">Active, revoked, expired, and usage.</p>
           <div className="stat-line">
             <span>Total licenses</span>
             <strong>{licenseCount}</strong>
           </div>
+          <div className="stat-line">
+            <span>Active</span>
+            <strong>{licenseStats.active}</strong>
+          </div>
+          <div className="stat-line">
+            <span>Revoked</span>
+            <strong>{licenseStats.revoked}</strong>
+          </div>
+          <div className="stat-line">
+            <span>Expired</span>
+            <strong>{licenseStats.expired}</strong>
+          </div>
+          <div className="stat-line">
+            <span>Avg. usage</span>
+            <strong>{licenseStats.avgUsage}%</strong>
+          </div>
         </div>
         <div className="card">
           <h2>Releases</h2>
-          <p className="muted">Published versions and channels.</p>
+          <p className="muted">Latest build and publishing details.</p>
           <div className="stat-line">
             <span>Total releases</span>
             <strong>{releaseCount}</strong>
+          </div>
+          <div className="stat-line">
+            <span>Published</span>
+            <strong>{releaseStats.publishedCount}</strong>
+          </div>
+          <div className="stat-line">
+            <span>Drafts</span>
+            <strong>{releaseStats.draftCount}</strong>
+          </div>
+          <div className="stat-line">
+            <span>Deprecated</span>
+            <strong>{releaseStats.deprecatedCount}</strong>
+          </div>
+          <div className="stat-line">
+            <span>Latest version</span>
+            <strong>{releaseStats.latestVersion}</strong>
+          </div>
+          <div className="stat-line">
+            <span>Channel</span>
+            <strong>{releaseStats.channel}</strong>
+          </div>
+          <div className="stat-line">
+            <span>Last release</span>
+            <strong>{formatDate(releaseStats.publishedAt)}</strong>
+          </div>
+        </div>
+        <div className="card">
+          <h2>Modules</h2>
+          <p className="muted">Adoption and force flags.</p>
+          <div className="stat-line">
+            <span>Total modules</span>
+            <strong>{moduleStats.total}</strong>
+          </div>
+          <div className="stat-line">
+            <span>Active in licenses</span>
+            <strong>{moduleStats.activeInLicenses}</strong>
+          </div>
+          <div className="stat-line">
+            <span>Forced on</span>
+            <strong>{moduleStats.forcedOn}</strong>
+          </div>
+          <div className="stat-line">
+            <span>Forced off</span>
+            <strong>{moduleStats.forcedOff}</strong>
+          </div>
+          <div className="stat-line">
+            <span>Used in activations</span>
+            <strong>{moduleStats.usedInActivations}</strong>
           </div>
         </div>
       </section>
     </div>
   )
 }
+function ModulesSection() {
+  const { projectId } = useParams()
+  const { licenseCount, activationCount, releaseCount } = useOutletContext<ProjectNavContext>()
+  const [modules, setModules] = useState<ProjectModule[]>([])
+  const [moduleKey, setModuleKey] = useState('')
+  const [moduleName, setModuleName] = useState('')
+  const [moduleDescription, setModuleDescription] = useState('')
+  const [moduleParams, setModuleParams] = useState<{ key: string; value: string }[]>([])
+  const [moduleError, setModuleError] = useState<string | null>(null)
+  const [moduleMessage, setModuleMessage] = useState<string | null>(null)
 
+  const loadModules = async (id: string) => {
+    try {
+      const data = await fetchJson<ProjectModule[]>(`${API_BASE}/projects/${id}/modules`)
+      setModules(data)
+      setModuleError(null)
+    } catch (error) {
+      if (error instanceof Error) {
+        setModuleError(`Unable to load modules (${error.message}).`)
+        return
+      }
+      setModuleError('Unable to load modules.')
+    }
+  }
+
+  useEffect(() => {
+    if (!projectId) return
+    void loadModules(projectId)
+  }, [projectId])
+
+  const handleAddParam = () => {
+    setModuleParams((prev) => [...prev, { key: '', value: '' }])
+  }
+
+  const handleParamChange = (index: number, field: 'key' | 'value', value: string) => {
+    setModuleParams((prev) => {
+      const next = [...prev]
+      next[index] = { ...next[index], [field]: value }
+      return next
+    })
+  }
+
+  const handleRemoveParam = (index: number) => {
+    setModuleParams((prev) => prev.filter((_, idx) => idx !== index))
+  }
+
+  const handleCreateModule = async () => {
+    if (!projectId) return
+    setModuleError(null)
+    setModuleMessage(null)
+    const paramsEntries = moduleParams
+      .map((pair) => ({ key: pair.key.trim(), value: pair.value.trim() }))
+      .filter((pair) => pair.key && pair.value)
+    const params = paramsEntries.length
+      ? Object.fromEntries(paramsEntries.map((pair) => [pair.key, pair.value]))
+      : undefined
+    try {
+      await fetchJson<ProjectModule>(`${API_BASE}/projects/${projectId}/modules`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          key: moduleKey.trim(),
+          name: moduleName.trim(),
+          description: moduleDescription.trim() || undefined,
+          params,
+        }),
+      })
+      setModuleKey('')
+      setModuleName('')
+      setModuleDescription('')
+      setModuleParams([])
+      setModuleMessage('Module created.')
+      await loadModules(projectId)
+    } catch (error) {
+      if (error instanceof Error) {
+        setModuleError(`Unable to create module (${error.message}).`)
+        return
+      }
+      setModuleError('Unable to create module.')
+    }
+  }
+
+  const handleDeleteModule = async (moduleId: string) => {
+    if (!projectId) return
+    const ok = window.confirm('Delete this module?')
+    if (!ok) return
+    setModuleError(null)
+    setModuleMessage(null)
+    try {
+      await fetchJson<{ deleted: boolean }>(`${API_BASE}/projects/${projectId}/modules/${moduleId}`, {
+        method: 'DELETE',
+      })
+      setModuleMessage('Module deleted.')
+      await loadModules(projectId)
+    } catch (error) {
+      if (error instanceof Error) {
+        setModuleError(`Unable to delete module (${error.message}).`)
+        return
+      }
+      setModuleError('Unable to delete module.')
+    }
+  }
+
+  if (!projectId) return null
+
+  return (
+    <div className="page">
+      <section className="hero">
+        <div className="hero-copy">
+          <div className="section-header">
+            <ProjectTabsBar
+              projectId={projectId}
+              licenseCount={licenseCount}
+              activationCount={activationCount}
+              releaseCount={releaseCount}
+            />
+            <div className="breadcrumb">
+              <Link to="/">Projects</Link>
+              <span>/</span>
+              <span>Modules</span>
+            </div>
+            <div className="section-title">
+              <h1>Project modules</h1>
+              <span className="section-pill">Modules</span>
+            </div>
+          </div>
+          <p>Create configurable modules for this project and reuse them across licenses.</p>
+        </div>
+      </section>
+
+      <section className="grid">
+        <div className="card">
+          <div className="card-header">
+            <div>
+              <h2>New module</h2>
+              <span className="muted">Define a key, name, and optional parameters.</span>
+            </div>
+          </div>
+          <div className="form">
+            <label className="field">
+              <span>Key</span>
+              <input value={moduleKey} onChange={(event) => setModuleKey(event.target.value)} />
+            </label>
+            <label className="field">
+              <span>Name</span>
+              <input value={moduleName} onChange={(event) => setModuleName(event.target.value)} />
+            </label>
+            <label className="field">
+              <span>Description</span>
+              <textarea
+                value={moduleDescription}
+                onChange={(event) => setModuleDescription(event.target.value)}
+                rows={3}
+              />
+            </label>
+            <div className="module-params">
+              <div className="module-params-header">
+                <span>Params</span>
+                <button className="ghost" onClick={handleAddParam}>
+                  Add param
+                </button>
+              </div>
+              {moduleParams.map((pair, index) => (
+                <div key={index} className="module-param-row">
+                  <input
+                    placeholder="Key"
+                    value={pair.key}
+                    onChange={(event) => handleParamChange(index, 'key', event.target.value)}
+                  />
+                  <input
+                    placeholder="Value"
+                    value={pair.value}
+                    onChange={(event) => handleParamChange(index, 'value', event.target.value)}
+                  />
+                  <button className="ghost" onClick={() => handleRemoveParam(index)}>
+                    Remove
+                  </button>
+                </div>
+              ))}
+              {moduleParams.length === 0 && <div className="empty">No params yet.</div>}
+            </div>
+            <button
+              className="primary"
+              onClick={handleCreateModule}
+              disabled={!moduleKey.trim() || !moduleName.trim()}
+            >
+              Create module
+            </button>
+            {moduleMessage && <div className="notice">{moduleMessage}</div>}
+            {moduleError && <div className="error">{moduleError}</div>}
+          </div>
+        </div>
+
+        <div className="card span-2">
+          <div className="card-header">
+            <div>
+              <h2>Modules list</h2>
+              <span className="muted">Manage existing modules and parameters.</span>
+            </div>
+            <button className="ghost" onClick={() => loadModules(projectId)}>
+              Reload
+            </button>
+          </div>
+          <div className="table">
+            <div className="table-row table-header module-row">
+              <span>Key</span>
+              <span>Name</span>
+              <span>Params</span>
+              <span>Actions</span>
+            </div>
+            {modules.map((module) => (
+              <div key={module.id} className="table-row module-row">
+                <span>{module.key}</span>
+                <span>{module.name}</span>
+                <span>{module.params ? Object.keys(module.params).length : 0}</span>
+                <div className="row-actions">
+                  <button className="ghost danger" onClick={() => handleDeleteModule(module.id)}>
+                    Delete
+                  </button>
+                </div>
+              </div>
+            ))}
+            {modules.length === 0 && <div className="empty">No modules created.</div>}
+          </div>
+        </div>
+      </section>
+    </div>
+  )
+}
 function LicensesSection() {
   const { projectId } = useParams()
   const { licenseCount: projectLicenseCount, activationCount, releaseCount } =
@@ -1214,6 +1582,12 @@ function LicensesSection() {
   const [showCreateForm, setShowCreateForm] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth > 960))
   const [showBulkForm, setShowBulkForm] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth > 960))
   const [showLicenseFilters, setShowLicenseFilters] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth > 960))
+  const [licenseModules, setLicenseModules] = useState<LicenseModuleItem[]>([])
+  const [licenseModuleLicenseId, setLicenseModuleLicenseId] = useState<string | null>(null)
+  const [licenseModuleModalOpen, setLicenseModuleModalOpen] = useState(false)
+  const [licenseModuleMessage, setLicenseModuleMessage] = useState<string | null>(null)
+  const [licenseModuleError, setLicenseModuleError] = useState<string | null>(null)
+  const [licenseModuleSaving, setLicenseModuleSaving] = useState(false)
   const navigate = useNavigate()
 
   const loadLicenses = async (id: string) => {
@@ -1228,7 +1602,10 @@ function LicensesSection() {
         const activations = await fetchJson<Activation[]>(
           `${API_BASE}/licenses/${license.license_id}/activations`,
         )
-        return { id: license.license_id, count: activations.length }
+        return {
+          id: license.license_id,
+          count: activations.filter((activation) => !activation.revoked).length,
+        }
       }),
     )
     const next: Record<string, number> = {}
@@ -1236,6 +1613,99 @@ function LicensesSection() {
       next[item.id] = item.count
     })
     setActivationCounts(next)
+  }
+
+  const forceValue = (module: LicenseModuleItem) => {
+    if (module.force_activation) return 'on'
+    if (module.force_deactivation) return 'off'
+    return 'none'
+  }
+
+  const openLicenseModules = async (licenseId: string) => {
+    setLicenseModuleError(null)
+    setLicenseModuleMessage(null)
+    setLicenseModuleLicenseId(licenseId)
+    setLicenseModuleModalOpen(true)
+    try {
+      const data = await fetchJson<{ modules: LicenseModuleItem[] }>(`${API_BASE}/licenses/${licenseId}/modules`)
+      setLicenseModules(data.modules)
+    } catch (error) {
+      if (error instanceof Error) {
+        setLicenseModuleError(`Unable to load modules (${error.message}).`)
+        return
+      }
+      setLicenseModuleError('Unable to load modules.')
+    }
+  }
+
+  const toggleLicenseModule = (moduleId: string) => {
+    setLicenseModules((prev) =>
+      prev.map((module) =>
+        module.module_id === moduleId
+          ? { ...module, enabled: !module.enabled }
+          : module,
+      ),
+    )
+  }
+
+  const updateLicenseModuleForce = (moduleId: string, value: 'none' | 'on' | 'off') => {
+    setLicenseModules((prev) =>
+      prev.map((module) => {
+        if (module.module_id !== moduleId) return module
+        if (value === 'on') {
+          return { ...module, force_activation: true, force_deactivation: false, enabled: true }
+        }
+        if (value === 'off') {
+          return { ...module, force_activation: false, force_deactivation: true, enabled: false }
+        }
+        return { ...module, force_activation: false, force_deactivation: false }
+      }),
+    )
+  }
+
+  const saveLicenseModules = async () => {
+    if (!licenseModuleLicenseId) return
+    setLicenseModuleSaving(true)
+    setLicenseModuleError(null)
+    setLicenseModuleMessage(null)
+    try {
+      const payload = {
+        modules: licenseModules
+          .filter((module) => module.enabled || module.force_activation || module.force_deactivation)
+          .map((module) => ({
+            key: module.key,
+            force_activation: module.force_activation || undefined,
+            force_deactivation: module.force_deactivation || undefined,
+          })),
+      }
+      const data = await fetchJson<{ modules: LicenseModuleItem[] }>(
+        `${API_BASE}/licenses/${licenseModuleLicenseId}/modules`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        },
+      )
+      setLicenseModules(data.modules)
+      setLicenseModuleMessage('Modules updated.')
+      if (projectId) {
+        await loadLicenses(projectId)
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        setLicenseModuleError(`Unable to save modules (${error.message}).`)
+        return
+      }
+      setLicenseModuleError('Unable to save modules.')
+    } finally {
+      setLicenseModuleSaving(false)
+    }
+  }
+
+  const revokeFromModules = async () => {
+    if (!licenseModuleLicenseId) return
+    await handleRevokeLicense(licenseModuleLicenseId)
+    setLicenseModuleModalOpen(false)
   }
 
   const handleCreateLicense = async () => {
@@ -1535,6 +2005,8 @@ function LicensesSection() {
     () => parseRecipients(bulkRecipients),
     [bulkRecipients],
   )
+  const moduleLicense = licenses.find((license) => license.license_id === licenseModuleLicenseId) ?? null
+  const moduleLicenseRevoked = moduleLicense ? moduleLicense.revoked || isExpired(moduleLicense) : false
 
   return (
     <div className="page">
@@ -1877,6 +2349,13 @@ function LicensesSection() {
                             <div className="row-actions" data-label="Actions">
                               <button
                                 className="ghost"
+                                onClick={() => openLicenseModules(license.license_id)}
+                              >
+                                <i className="fa-solid fa-pen-to-square mobile-only" aria-hidden="true" />
+                                <span className="desktop-only">Edit</span>
+                              </button>
+                              <button
+                                className="ghost"
                                 onClick={() => navigate(`/projects/${projectId}/activations?license=${license.license_id}`)}
                               >
                                 <i className="fa-solid fa-wave-square mobile-only" aria-hidden="true" />
@@ -1930,6 +2409,13 @@ function LicensesSection() {
                 <div className="row-actions" data-label="Actions">
                   <button
                     className="ghost"
+                    onClick={() => openLicenseModules(license.license_id)}
+                  >
+                    <i className="fa-solid fa-pen-to-square mobile-only" aria-hidden="true" />
+                    <span className="desktop-only">Edit</span>
+                  </button>
+                  <button
+                    className="ghost"
                     onClick={() => navigate(`/projects/${projectId}/activations?license=${license.license_id}`)}
                   >
                     <i className="fa-solid fa-wave-square mobile-only" aria-hidden="true" />
@@ -1950,6 +2436,76 @@ function LicensesSection() {
           </div>
         </div>
       </section>
+      {licenseModuleModalOpen && licenseModuleLicenseId && (
+        <div className="modal-backdrop" role="presentation" onClick={() => setLicenseModuleModalOpen(false)}>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="license-modules-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <h2 id="license-modules-title">License modules</h2>
+              <button className="icon-button" onClick={() => setLicenseModuleModalOpen(false)} aria-label="Close">
+                <i className="fa-solid fa-xmark" />
+              </button>
+            </div>
+            <p className="muted">License ID: {licenseModuleLicenseId}</p>
+            <div className="module-switches">
+              <div className="module-switch-grid">
+                {licenseModules.map((module) => (
+                  <div key={module.module_id} className="module-switch-row">
+                    <label className="module-switch">
+                      <input
+                        type="checkbox"
+                        checked={module.enabled}
+                        onChange={() => toggleLicenseModule(module.module_id)}
+                        disabled={Boolean(module.force_activation || module.force_deactivation)}
+                      />
+                      <span className="switch-track" />
+                      <span className="switch-label">
+                        {module.name} <span className="muted">({module.key})</span>
+                      </span>
+                    </label>
+                    <div className="module-force-select">
+                      <span>Force</span>
+                      <select
+                        value={forceValue(module)}
+                        onChange={(event) =>
+                          updateLicenseModuleForce(module.module_id, event.target.value as 'none' | 'on' | 'off')
+                        }
+                      >
+                        <option value="none">None</option>
+                        <option value="on">On</option>
+                        <option value="off">Off</option>
+                      </select>
+                    </div>
+                    {module.force_activation && <span className="module-chip">Forced on</span>}
+                    {module.force_deactivation && <span className="module-chip off">Forced off</span>}
+                  </div>
+                ))}
+                {licenseModules.length === 0 && <div className="empty">No modules found.</div>}
+              </div>
+            </div>
+            {licenseModuleError && <div className="error">{licenseModuleError}</div>}
+            {licenseModuleMessage && <div className="notice">{licenseModuleMessage}</div>}
+            <div className="modal-actions">
+              <button className="ghost" onClick={() => setLicenseModuleModalOpen(false)}>Close</button>
+              <button
+                className="ghost danger"
+                onClick={revokeFromModules}
+                disabled={moduleLicenseRevoked}
+              >
+                Revoke license
+              </button>
+              <button className="primary" onClick={saveLicenseModules} disabled={licenseModuleSaving}>
+                Save modules
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1966,6 +2522,14 @@ function ActivationsSection() {
   const [activationSort, setActivationSort] = useState<'created_desc' | 'created_asc'>('created_desc')
   const [activationPage, setActivationPage] = useState(1)
   const [activationPageSize, setActivationPageSize] = useState(10)
+  const [activationModules, setActivationModules] = useState<ActivationModuleItem[]>([])
+  const [moduleModalOpen, setModuleModalOpen] = useState(false)
+  const [moduleActivationId, setModuleActivationId] = useState<string | null>(null)
+  const [moduleMessage, setModuleMessage] = useState<string | null>(null)
+  const [moduleError, setModuleError] = useState<string | null>(null)
+  const [moduleSaving, setModuleSaving] = useState(false)
+  const [hostnamePassword, setHostnamePassword] = useState('')
+  const [hostnameReveal, setHostnameReveal] = useState<string | null>(null)
 
   const loadLicenses = async (id: string) => {
     const data = await fetchJson<License[]>(`${API_BASE}/licenses?project_id=${id}`)
@@ -1981,6 +2545,103 @@ function ActivationsSection() {
   const loadActivations = async (licenseId: string) => {
     const data = await fetchJson<Activation[]>(`${API_BASE}/licenses/${licenseId}/activations`)
     setActivations(data)
+  }
+
+  const openActivationModules = async (activationId: string) => {
+    if (!selectedLicenseId) return
+    setModuleActivationId(activationId)
+    setModuleModalOpen(true)
+    setModuleMessage(null)
+    setModuleError(null)
+    setHostnameReveal(null)
+    setHostnamePassword('')
+    try {
+      const data = await fetchJson<{ modules: ActivationModuleItem[] }>(
+        `${API_BASE}/licenses/${selectedLicenseId}/activations/${activationId}/modules`,
+      )
+      setActivationModules(data.modules)
+    } catch (error) {
+      if (error instanceof Error) {
+        setModuleError(`Unable to load modules (${error.message}).`)
+        return
+      }
+      setModuleError('Unable to load modules.')
+    }
+  }
+
+  const toggleActivationModule = (moduleId: string) => {
+    setActivationModules((prev) =>
+      prev.map((module) =>
+        module.module_id === moduleId
+          ? { ...module, enabled: !module.enabled }
+          : module,
+      ),
+    )
+  }
+
+  const saveActivationModules = async () => {
+    if (!selectedLicenseId || !moduleActivationId) return
+    setModuleSaving(true)
+    setModuleError(null)
+    setModuleMessage(null)
+    try {
+      const moduleKeys = activationModules
+        .filter((module) => module.enabled)
+        .map((module) => module.key)
+      const data = await fetchJson<{ modules: ActivationModuleItem[] }>(
+        `${API_BASE}/licenses/${selectedLicenseId}/activations/${moduleActivationId}/modules`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ module_keys: moduleKeys }),
+        },
+      )
+      setActivationModules(data.modules)
+      setModuleMessage('Modules updated.')
+      await loadActivations(selectedLicenseId)
+    } catch (error) {
+      if (error instanceof Error) {
+        setModuleError(`Unable to save modules (${error.message}).`)
+        return
+      }
+      setModuleError('Unable to save modules.')
+    } finally {
+      setModuleSaving(false)
+    }
+  }
+
+  const revealHostname = async () => {
+    if (!selectedLicenseId || !moduleActivationId) return
+    setModuleError(null)
+    setHostnameReveal(null)
+    try {
+      const data = await fetchJson<{ hostname?: string }>(
+        `${API_BASE}/licenses/${selectedLicenseId}/activations/${moduleActivationId}/hostname`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: hostnamePassword }),
+        },
+      )
+      if (data.hostname) {
+        setHostnameReveal(data.hostname)
+      } else {
+        setHostnameReveal('Not available')
+      }
+    } catch (error) {
+      if (error instanceof Error) {
+        setModuleError(`Unable to reveal hostname (${error.message}).`)
+        return
+      }
+      setModuleError('Unable to reveal hostname.')
+    }
+  }
+
+  const formatLastSeen = (value?: string) => {
+    if (!value) return 'Never'
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return 'n/a'
+    return date.toLocaleString()
   }
 
   const handleRevokeActivation = async (activationId: string) => {
@@ -2016,7 +2677,7 @@ function ActivationsSection() {
       if (activationStatus === 'active' && activation.revoked) return false
       if (activationStatus === 'revoked' && !activation.revoked) return false
       if (!normalizedQuery) return true
-      const haystack = `${activation.activation_id} ${activation.device_id_hash}`.toLowerCase()
+      const haystack = `${activation.activation_id} ${activation.device_id_hash} ${activation.hostname_masked ?? ''}`.toLowerCase()
       return haystack.includes(normalizedQuery)
     })
     const sorted = [...filtered].sort((a, b) => {
@@ -2107,6 +2768,8 @@ function ActivationsSection() {
                 <span>Search</span>
                 <input
                   type="text"
+                  name="activation-search"
+                  autoComplete="off"
                   value={activationQuery}
                   onChange={(event) => {
                     setActivationQuery(event.target.value)
@@ -2181,23 +2844,36 @@ function ActivationsSection() {
             </div>
           </div>
           <div className="table">
-            <div className="table-row table-header">
+            <div className="table-row table-header activation-row">
               <span>ID</span>
-              <span>Device Hash</span>
+              <span>Device</span>
+              <span>Host</span>
               <span>Status</span>
+              <span>Last seen</span>
               <span>Actions</span>
             </div>
             {pagedActivations.map((activation) => (
-              <div key={activation.activation_id} className="table-row">
-                <span>{activation.activation_id.slice(0, 8)}...</span>
-                <span>{activation.device_id_hash.slice(0, 10)}...</span>
-                <span>{activation.revoked ? 'Revoked' : 'Active'}</span>
-                <div className="row-actions">
+              <div key={activation.activation_id} className="table-row activation-row">
+                <span data-label="ID">{activation.activation_id.slice(0, 8)}...</span>
+                <span data-label="Device">{activation.device_id_hash.slice(0, 10)}...</span>
+                <span data-label="Host">{activation.hostname_masked ?? 'Hidden'}</span>
+                <span data-label="Status">{activation.revoked ? 'Revoked' : 'Active'}</span>
+                <span data-label="Last seen">{formatLastSeen(activation.last_seen_at)}</span>
+                <div className="row-actions" data-label="Actions">
+                  <button
+                    className="ghost"
+                    onClick={() => openActivationModules(activation.activation_id)}
+                  >
+                    <i className="fa-solid fa-pen-to-square mobile-only" aria-hidden="true" />
+                    <span className="desktop-only">Edit</span>
+                  </button>
                   <button
                     className="ghost danger"
                     onClick={() => handleRevokeActivation(activation.activation_id)}
+                    disabled={activation.revoked}
                   >
-                    Revoke
+                    <i className="fa-solid fa-ban mobile-only" aria-hidden="true" />
+                    <span className="desktop-only">Revoke</span>
                   </button>
                 </div>
               </div>
@@ -2206,6 +2882,76 @@ function ActivationsSection() {
           </div>
         </div>
       </section>
+      {moduleModalOpen && moduleActivationId && (
+        <div className="modal-backdrop" role="presentation" onClick={() => setModuleModalOpen(false)}>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="activation-modules-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <h2 id="activation-modules-title">Activation modules</h2>
+              <button className="icon-button" onClick={() => setModuleModalOpen(false)} aria-label="Close">
+                <i className="fa-solid fa-xmark" />
+              </button>
+            </div>
+            <p className="muted">Activation ID: {moduleActivationId}</p>
+            <div className="module-switches">
+              <div className="module-switch-grid">
+                {activationModules.map((module) => (
+                  <div key={module.module_id} className="module-switch-row">
+                    <label className="module-switch">
+                      <input
+                        type="checkbox"
+                        checked={module.enabled}
+                        onChange={() => toggleActivationModule(module.module_id)}
+                        disabled={Boolean(module.force_activation || module.force_deactivation)}
+                      />
+                      <span className="switch-track" />
+                      <span className="switch-label">
+                        {module.name} <span className="muted">({module.key})</span>
+                      </span>
+                    </label>
+                    {module.force_activation && <span className="module-chip">Forced on</span>}
+                    {module.force_deactivation && <span className="module-chip off">Forced off</span>}
+                  </div>
+                ))}
+                {activationModules.length === 0 && <div className="empty">No modules found.</div>}
+              </div>
+            </div>
+            <div className="module-switches">
+              <span className="field-label">Reveal hostname</span>
+              <div className="form two-column">
+                <label className="field">
+                  <span>Password</span>
+                  <input
+                    type="password"
+                    name="activation-hostname-password"
+                    autoComplete="new-password"
+                    value={hostnamePassword}
+                    onChange={(event) => setHostnamePassword(event.target.value)}
+                    placeholder="Confirm password"
+                  />
+                </label>
+                <button className="ghost" onClick={revealHostname} disabled={!hostnamePassword.trim()}>
+                  Reveal
+                </button>
+              </div>
+              {hostnameReveal && <div className="notice">{hostnameReveal}</div>}
+            </div>
+            {moduleError && <div className="error">{moduleError}</div>}
+            {moduleMessage && <div className="notice">{moduleMessage}</div>}
+            <div className="modal-actions">
+              <button className="ghost" onClick={() => setModuleModalOpen(false)}>Close</button>
+              <button className="primary" onClick={saveActivationModules} disabled={moduleSaving}>
+                Save modules
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -2217,11 +2963,13 @@ function ReleasesSection() {
   const [releases, setReleases] = useState<Release[]>([])
   const [releaseVersion, setReleaseVersion] = useState('')
   const [releaseChannel, setReleaseChannel] = useState('stable')
+  const [releaseStatus, setReleaseStatus] = useState<'draft' | 'published' | 'deprecated'>('published')
   const [releaseNotes, setReleaseNotes] = useState('')
   const [releaseFile, setReleaseFile] = useState<File | null>(null)
   const [releaseError, setReleaseError] = useState<string | null>(null)
   const [releaseQuery, setReleaseQuery] = useState('')
   const [releaseChannelFilter, setReleaseChannelFilter] = useState<'all' | 'stable' | 'beta' | 'hotfix'>('all')
+  const [releaseStatusFilter, setReleaseStatusFilter] = useState<'all' | 'draft' | 'published' | 'deprecated'>('all')
   const [releaseSort, setReleaseSort] = useState<'published_desc' | 'published_asc'>('published_desc')
   const [releasePage, setReleasePage] = useState(1)
   const [releasePageSize, setReleasePageSize] = useState(12)
@@ -2232,14 +2980,24 @@ function ReleasesSection() {
     setReleases(data)
   }
 
-  const handlePromoteRelease = async (releaseId: string) => {
+  const handlePublishRelease = async (releaseId: string) => {
     if (!projectId) return
-    const channel = window.prompt('Promote to channel (stable/beta/hotfix):', 'stable')
+    const channel = window.prompt('Publish to channel (stable/beta/hotfix):', 'stable')
     if (!channel || !['stable', 'beta', 'hotfix'].includes(channel)) return
     await fetchJson<Release>(`${API_BASE}/projects/${projectId}/releases/${releaseId}/promote`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ channel }),
+      body: JSON.stringify({ channel, status: 'published' }),
+    })
+    await loadReleases(projectId)
+  }
+
+  const handleDeprecateRelease = async (releaseId: string) => {
+    if (!projectId) return
+    await fetchJson<Release>(`${API_BASE}/projects/${projectId}/releases/${releaseId}/promote`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'deprecated' }),
     })
     await loadReleases(projectId)
   }
@@ -2255,40 +3013,63 @@ function ReleasesSection() {
 
   const handleCreateRelease = async () => {
     if (!projectId || !releaseVersion.trim()) return
-    if (releaseFile) {
-      const formData = new FormData()
-      formData.append('file', releaseFile)
-      formData.append('version', releaseVersion.trim())
-      formData.append('channel', releaseChannel)
-      if (releaseNotes.trim()) {
-        formData.append('notes', releaseNotes.trim())
-      }
-      const token = window.localStorage.getItem(TOKEN_KEY)
-      const res = await fetch(`${API_BASE}/projects/${projectId}/releases/upload`, {
-        method: 'POST',
-        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        body: formData,
-      })
-      if (!res.ok) {
-        throw new Error(`HTTP ${res.status}`)
-      }
-    } else {
-      await fetchJson<Release>(`${API_BASE}/projects/${projectId}/releases`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          version: releaseVersion.trim(),
-          channel: releaseChannel,
-          notes: releaseNotes.trim() || undefined,
-        }),
-      })
+    setReleaseError(null)
+    const normalizedVersion = releaseVersion.trim()
+    const versionExists = releases.some((release) => release.version === normalizedVersion)
+    if (versionExists) {
+      setReleaseError('Version already exists for this project.')
+      return
     }
+    try {
+      if (releaseFile) {
+        const formData = new FormData()
+        formData.append('file', releaseFile)
+        formData.append('version', normalizedVersion)
+        formData.append('status', releaseStatus)
+        if (releaseStatus !== 'draft') {
+          formData.append('channel', releaseChannel)
+        }
+        if (releaseNotes.trim()) {
+          formData.append('notes', releaseNotes.trim())
+        }
+        const token = window.localStorage.getItem(TOKEN_KEY)
+        const res = await fetch(`${API_BASE}/projects/${projectId}/releases/upload`, {
+          method: 'POST',
+          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+          body: formData,
+        })
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`)
+        }
+      } else {
+        await fetchJson<Release>(`${API_BASE}/projects/${projectId}/releases`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            version: normalizedVersion,
+            channel: releaseStatus === 'draft' ? undefined : releaseChannel,
+            status: releaseStatus,
+            notes: releaseNotes.trim() || undefined,
+          }),
+        })
+      }
 
-    setReleaseVersion('')
-    setReleaseNotes('')
-    setReleaseFile(null)
+      setReleaseVersion('')
+      setReleaseNotes('')
+      setReleaseFile(null)
 
-    await loadReleases(projectId)
+      await loadReleases(projectId)
+    } catch (error) {
+      if (error instanceof Error) {
+        if (error.message.includes('HTTP 409')) {
+          setReleaseError('Version already exists for this project.')
+          return
+        }
+        setReleaseError(`Unable to create release (${error.message}).`)
+        return
+      }
+      setReleaseError('Unable to create release.')
+    }
   }
 
   useEffect(() => {
@@ -2304,18 +3085,23 @@ function ReleasesSection() {
       if (releaseChannelFilter !== 'all' && release.channel !== releaseChannelFilter) {
         return false
       }
+      if (releaseStatusFilter !== 'all' && release.status !== releaseStatusFilter) {
+        return false
+      }
       if (!normalizedQuery) return true
       const haystack = `${release.version} ${release.notes ?? ''}`.toLowerCase()
       return haystack.includes(normalizedQuery)
     })
     const sorted = [...filtered].sort((a, b) => {
+      const aTime = a.published_at ? new Date(a.published_at).getTime() : 0
+      const bTime = b.published_at ? new Date(b.published_at).getTime() : 0
       if (releaseSort === 'published_asc') {
-        return new Date(a.published_at).getTime() - new Date(b.published_at).getTime()
+        return aTime - bTime
       }
-      return new Date(b.published_at).getTime() - new Date(a.published_at).getTime()
+      return bTime - aTime
     })
     return sorted
-  }, [releases, releaseChannelFilter, releaseSort, normalizedQuery])
+  }, [releases, releaseChannelFilter, releaseStatusFilter, releaseSort, normalizedQuery])
 
   const totalReleases = filteredReleases.length
   const totalReleasePages = Math.max(1, Math.ceil(totalReleases / releasePageSize))
@@ -2328,6 +3114,13 @@ function ReleasesSection() {
       setReleasePage(totalReleasePages)
     }
   }, [releasePage, totalReleasePages])
+
+  const formatReleaseDate = (value?: string) => {
+    if (!value) return 'Not published'
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return 'n/a'
+    return date.toLocaleDateString()
+  }
 
   return (
     <div className="page">
@@ -2375,8 +3168,23 @@ function ReleasesSection() {
               />
             </label>
             <label className="field">
+              <span>Status</span>
+              <select
+                value={releaseStatus}
+                onChange={(event) => setReleaseStatus(event.target.value as typeof releaseStatus)}
+              >
+                <option value="published">Published</option>
+                <option value="draft">Draft</option>
+                <option value="deprecated">Deprecated</option>
+              </select>
+            </label>
+            <label className="field">
               <span>Channel</span>
-              <select value={releaseChannel} onChange={(event) => setReleaseChannel(event.target.value)}>
+              <select
+                value={releaseChannel}
+                onChange={(event) => setReleaseChannel(event.target.value)}
+                disabled={releaseStatus === 'draft'}
+              >
                 <option value="stable">Stable</option>
                 <option value="beta">Beta</option>
                 <option value="hotfix">Hotfix</option>
@@ -2400,7 +3208,7 @@ function ReleasesSection() {
               <span className="muted">Leave empty to create a metadata-only release.</span>
             </label>
             <button className="primary" onClick={handleCreateRelease}>
-              Publish release
+              Create release
             </button>
           </div>
         </div>
@@ -2441,6 +3249,21 @@ function ReleasesSection() {
                   <option value="stable">Stable</option>
                   <option value="beta">Beta</option>
                   <option value="hotfix">Hotfix</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Status</span>
+                <select
+                  value={releaseStatusFilter}
+                  onChange={(event) => {
+                    setReleaseStatusFilter(event.target.value as typeof releaseStatusFilter)
+                    setReleasePage(1)
+                  }}
+                >
+                  <option value="all">All</option>
+                  <option value="published">Published</option>
+                  <option value="draft">Draft</option>
+                  <option value="deprecated">Deprecated</option>
                 </select>
               </label>
               <label className="field">
@@ -2497,10 +3320,13 @@ function ReleasesSection() {
           <div className="release-grid">
             {pagedReleases.map((release) => (
               <div key={release.id} className="release">
-                <div className={`release-tag ${release.channel}`}>{release.channel}</div>
+                <div className="release-badges">
+                  <div className={`release-tag ${release.status}`}>{release.status}</div>
+                  {release.channel && <div className={`release-tag ${release.channel}`}>{release.channel}</div>}
+                </div>
                 <strong>{release.version}</strong>
                 <span className="muted">{release.notes ?? 'No notes'}</span>
-                <span className="muted">{new Date(release.published_at).toLocaleDateString()}</span>
+                <span className="muted">{formatReleaseDate(release.published_at)}</span>
                 {release.asset ? (
                   <span className="muted">Asset: {release.asset.filename}</span>
                 ) : (
@@ -2515,9 +3341,21 @@ function ReleasesSection() {
                   <button className="ghost" onClick={() => navigate(`/projects/${projectId}/releases/${release.id}`)}>
                     Details
                   </button>
-                  <button className="ghost" onClick={() => handlePromoteRelease(release.id)}>
-                    Promote
-                  </button>
+                  {release.status === 'draft' && (
+                    <button className="ghost" onClick={() => handlePublishRelease(release.id)}>
+                      Publish
+                    </button>
+                  )}
+                  {release.status === 'published' && (
+                    <button className="ghost" onClick={() => handleDeprecateRelease(release.id)}>
+                      Deprecate
+                    </button>
+                  )}
+                  {release.status === 'deprecated' && (
+                    <button className="ghost" onClick={() => handlePublishRelease(release.id)}>
+                      Re-publish
+                    </button>
+                  )}
                 </div>
               </div>
             ))}
@@ -2549,19 +3387,41 @@ function ReleaseDetailSection() {
     }
   }
 
-  const handlePromote = async () => {
+  const handlePublish = async () => {
     if (!projectId || !releaseId) return
     setError(null)
     try {
       await fetchJson<Release>(`${API_BASE}/projects/${projectId}/releases/${releaseId}/promote`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ channel: promoteChannel }),
+        body: JSON.stringify({ channel: promoteChannel, status: 'published' }),
       })
       await loadRelease()
     } catch {
-      setError('Unable to promote release.')
+      setError('Unable to publish release.')
     }
+  }
+
+  const handleDeprecate = async () => {
+    if (!projectId || !releaseId) return
+    setError(null)
+    try {
+      await fetchJson<Release>(`${API_BASE}/projects/${projectId}/releases/${releaseId}/promote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'deprecated' }),
+      })
+      await loadRelease()
+    } catch {
+      setError('Unable to deprecate release.')
+    }
+  }
+
+  const formatReleaseDate = (value?: string) => {
+    if (!value) return 'Not published'
+    const date = new Date(value)
+    if (Number.isNaN(date.getTime())) return 'n/a'
+    return date.toLocaleDateString()
   }
 
   const handleDownload = async () => {
@@ -2605,7 +3465,7 @@ function ReleaseDetailSection() {
               <span className="section-pill">Updates</span>
             </div>
           </div>
-          <p>Inspect asset metadata and promote this release to another channel.</p>
+          <p>Inspect asset metadata, publish drafts, or deprecate releases.</p>
         </div>
       </section>
 
@@ -2619,17 +3479,25 @@ function ReleaseDetailSection() {
           </div>
           {release ? (
             <div className="form">
+              <div className="release-badges">
+                <div className={`release-tag ${release.status}`}>{release.status}</div>
+                {release.channel && <div className={`release-tag ${release.channel}`}>{release.channel}</div>}
+              </div>
               <div className="stat-line">
                 <span>Version</span>
                 <strong>{release.version}</strong>
               </div>
               <div className="stat-line">
                 <span>Channel</span>
-                <strong>{release.channel}</strong>
+                <strong>{release.channel ?? 'n/a'}</strong>
               </div>
               <div className="stat-line">
                 <span>Published</span>
-                <strong>{new Date(release.published_at).toLocaleDateString()}</strong>
+                <strong>{formatReleaseDate(release.published_at)}</strong>
+              </div>
+              <div className="stat-line">
+                <span>Status</span>
+                <strong>{release.status}</strong>
               </div>
               <div className="stat-line">
                 <span>Notes</span>
@@ -2675,13 +3543,13 @@ function ReleaseDetailSection() {
         <div className="card span-2">
           <div className="card-header">
             <div>
-              <h2>Promote / rollback</h2>
-              <span className="muted">Clone this release into another channel.</span>
+              <h2>Publish / deprecate</h2>
+              <span className="muted">Publish to a channel or mark as deprecated.</span>
             </div>
           </div>
           <div className="form">
             <label className="field">
-              <span>Target channel</span>
+              <span>Publish channel</span>
               <select
                 value={promoteChannel}
                 onChange={(event) => setPromoteChannel(event.target.value as typeof promoteChannel)}
@@ -2692,9 +3560,14 @@ function ReleaseDetailSection() {
               </select>
             </label>
             <div className="row-actions">
-              <button className="primary" onClick={handlePromote}>
-                Set as latest in channel
+              <button className="primary" onClick={handlePublish}>
+                Publish
               </button>
+              {release?.status === 'published' && (
+                <button className="ghost" onClick={handleDeprecate}>
+                  Deprecate
+                </button>
+              )}
               <Link className="ghost" to={`/projects/${projectId}/releases`}>
                 Back to releases
               </Link>
@@ -3314,6 +4187,7 @@ function App() {
                 <Route path="/projects/:projectId" element={<ProjectLayout />}>
                   <Route index element={<Navigate to="overview" replace />} />
                   <Route path="overview" element={<OverviewSection />} />
+                  <Route path="modules" element={<ModulesSection />} />
                   <Route path="licenses" element={<LicensesSection />} />
                   <Route path="activations" element={<ActivationsSection />} />
                   <Route path="releases" element={<ReleasesSection />} />
@@ -3329,3 +4203,9 @@ function App() {
 }
 
 export default App
+
+
+
+
+
+

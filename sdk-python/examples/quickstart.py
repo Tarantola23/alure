@@ -1,17 +1,20 @@
 from alure_sdk import AlureClient, FileStorage, HttpError
+from pathlib import Path
+import platform
 
 
 def main() -> None:
+    base_dir = Path(__file__).resolve().parent / ".alure-client"
     client = AlureClient(
         base_url="http://localhost:3000/api/v1",
-        storage=FileStorage("./.alure-test"),
+        storage=FileStorage(base_dir),
     )
 
     license_key = input("License key: ").strip()
     device_id = input("Device ID (leave empty for auto): ").strip() or None
 
     try:
-        activation = client.activate(license_key, device_id)
+        activation = client.activate(license_key, device_id, device_meta={"hostname": platform.node()})
         print("Activation ID:", activation.activation_id)
     except HttpError as exc:
         if exc.status_code == 409:

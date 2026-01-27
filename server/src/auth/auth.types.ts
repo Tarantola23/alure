@@ -112,10 +112,58 @@ export class AcceptInviteRequestDto {
   @ApiProperty()
   @IsString()
   @IsNotEmpty()
+  otp: string;
+
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
   password: string;
 }
 
 export class AcceptInviteResponseDto {
   @ApiProperty()
   accepted: boolean;
+}
+
+export class InviteStatusResponseDto {
+  @ApiProperty()
+  @IsString()
+  status: 'valid' | 'expired' | 'used' | 'invalid';
+}
+
+export class UserListItemDto {
+  @ApiProperty()
+  @IsString()
+  user_id: string;
+
+  @ApiProperty()
+  @IsString()
+  email: string;
+
+  @ApiProperty()
+  @IsString()
+  name: string;
+
+  @ApiProperty()
+  @IsString()
+  role: string;
+
+  @ApiProperty()
+  @IsString()
+  invite_status: 'accepted' | 'pending' | 'expired';
+
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  invite_expires_at?: string;
+}
+
+export class ResendInviteResponseDto {
+  @ApiProperty()
+  @IsString()
+  user_id: string;
+
+  @ApiProperty()
+  @IsString()
+  invite_expires_at: string;
 }

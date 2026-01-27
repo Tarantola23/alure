@@ -11,6 +11,10 @@ type ReceiptPayload = {
   issued_at: string;
   expires_at: string | null;
   grace_period_days: number;
+  modules?: {
+    key: string;
+    params?: Record<string, string>;
+  }[];
 };
 
 const base64Url = (value: Buffer): string =>

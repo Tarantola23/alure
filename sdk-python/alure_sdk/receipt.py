@@ -22,6 +22,7 @@ class ReceiptValidationResult:
     reason: str | None = None
     expires_at: str | None = None
     grace_period_days: int | None = None
+    modules: list[dict[str, Any]] | None = None
 
 
 class ReceiptVerifier:
@@ -78,6 +79,7 @@ class ReceiptVerifier:
             return ReceiptValidationResult(valid=False, reason="device_mismatch")
 
         expires_at = payload.get("expires_at")
+        modules = payload.get("modules") or []
         grace_days = int(payload.get("grace_period_days") or 0)
         now_dt = now or datetime.now(timezone.utc)
 
@@ -92,6 +94,12 @@ class ReceiptVerifier:
                     reason="grace_period",
                     expires_at=expires_at,
                     grace_period_days=grace_days,
+                    modules=modules,
                 )
 
-        return ReceiptValidationResult(valid=True, expires_at=expires_at, grace_period_days=grace_days)
+        return ReceiptValidationResult(
+            valid=True,
+            expires_at=expires_at,
+            grace_period_days=grace_days,
+            modules=modules,
+        )

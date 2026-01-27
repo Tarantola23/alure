@@ -14,7 +14,8 @@ goto end
 
 :dev
 set "DB_URL=postgresql://postgres:alure@localhost:5432/alure"
-start "Server (dev)" cmd /k "cd /d %~dp0server && set DATABASE_URL=%DB_URL% && npm run start:dev"
+set "DATA_ENCRYPTION_KEY=XeZZNvWtA9nPFYvsSaGwhXZfnjNDDla9evhvI7TwnS4="
+start "Server (dev)" cmd /k "cd /d %~dp0server && set DATABASE_URL=%DB_URL% && set SWAGGER_ENABLED=true && set DATA_ENCRYPTION_KEY=%DATA_ENCRYPTION_KEY% && npm run start:dev"
 start "Dashboard (dev)" cmd /k "cd /d %~dp0dashboard && npm run dev"
 goto end
 

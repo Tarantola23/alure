@@ -1,5 +1,5 @@
-import { Body, Controller, Delete, Get, Param, Post, UploadedFile, UseInterceptors } from '@nestjs/common';
-import { ApiBody, ApiConsumes, ApiParam, ApiTags } from '@nestjs/swagger';
+﻿import { Body, Controller, Delete, ForbiddenException, Get, Param, Post, Put, Req, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
+import { ApiBearerAuth, ApiBody, ApiConsumes, ApiParam, ApiTags } from '@nestjs/swagger';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { diskStorage } from 'multer';
 type UploadedReleaseFile = {
@@ -11,15 +11,22 @@ import { mkdirSync } from 'fs';
 import path from 'path';
 import { randomUUID } from 'crypto';
 import { ProjectsService } from './projects.service';
+import { AuthGuard } from '../auth/auth.guard';
 import {
   CreateProjectRequestDto,
+  CreateProjectModuleRequestDto,
   CreateReleaseRequestDto,
   ProjectDto,
+  ProjectModuleDto,
+  ProjectOverviewDto,
   PromoteReleaseRequestDto,
   ReleaseListItemDto,
+  UpdateProjectModuleRequestDto,
 } from './projects.types';
 
 @ApiTags('projects')
+@ApiBearerAuth()
+@UseGuards(AuthGuard)
 @Controller('projects')
 export class ProjectsController {
   constructor(private readonly projectsService: ProjectsService) {}
@@ -29,14 +36,63 @@ export class ProjectsController {
     return this.projectsService.listProjects();
   }
 
+  @Get(':projectId/overview')
+  @ApiParam({ name: 'projectId' })
+  async getOverview(@Param('projectId') projectId: string): Promise<ProjectOverviewDto> {
+    return this.projectsService.getOverview(projectId);
+  }
+  @Get(':projectId/modules')
+  @ApiParam({ name: 'projectId' })
+  async listModules(@Param('projectId') projectId: string): Promise<ProjectModuleDto[]> {
+    return this.projectsService.listModules(projectId);
+  }
+
   @Post()
-  async createProject(@Body() body: CreateProjectRequestDto): Promise<ProjectDto> {
+  async createProject(@Req() req: { user?: { role: string } }, @Body() body: CreateProjectRequestDto): Promise<ProjectDto> {
+    this.assertAdmin(req);
     return this.projectsService.createProject(body);
+  }
+
+  @Post(':projectId/modules')
+  @ApiParam({ name: 'projectId' })
+  async createModule(
+    @Req() req: { user?: { role: string } },
+    @Param('projectId') projectId: string,
+    @Body() body: CreateProjectModuleRequestDto,
+  ): Promise<ProjectModuleDto> {
+    this.assertAdmin(req);
+    return this.projectsService.createModule(projectId, body);
+  }
+
+  @Put(':projectId/modules/:moduleId')
+  @ApiParam({ name: 'projectId' })
+  @ApiParam({ name: 'moduleId' })
+  async updateModule(
+    @Req() req: { user?: { role: string } },
+    @Param('projectId') projectId: string,
+    @Param('moduleId') moduleId: string,
+    @Body() body: UpdateProjectModuleRequestDto,
+  ): Promise<ProjectModuleDto> {
+    this.assertAdmin(req);
+    return this.projectsService.updateModule(projectId, moduleId, body);
+  }
+
+  @Delete(':projectId/modules/:moduleId')
+  @ApiParam({ name: 'projectId' })
+  @ApiParam({ name: 'moduleId' })
+  async deleteModule(
+    @Req() req: { user?: { role: string } },
+    @Param('projectId') projectId: string,
+    @Param('moduleId') moduleId: string,
+  ): Promise<{ deleted: boolean }> {
+    this.assertAdmin(req);
+    return this.projectsService.deleteModule(projectId, moduleId);
   }
 
   @Delete(':projectId')
   @ApiParam({ name: 'projectId' })
-  async deleteProject(@Param('projectId') projectId: string): Promise<{ deleted: boolean }> {
+  async deleteProject(@Req() req: { user?: { role: string } }, @Param('projectId') projectId: string): Promise<{ deleted: boolean }> {
+    this.assertAdmin(req);
     return this.projectsService.deleteProject(projectId);
   }
 
@@ -59,9 +115,11 @@ export class ProjectsController {
   @Post(':projectId/releases')
   @ApiParam({ name: 'projectId' })
   async createRelease(
+    @Req() req: { user?: { role: string } },
     @Param('projectId') projectId: string,
     @Body() body: CreateReleaseRequestDto,
   ): Promise<ReleaseListItemDto> {
+    this.assertAdmin(req);
     return this.projectsService.createRelease(projectId, body);
   }
 
@@ -71,11 +129,12 @@ export class ProjectsController {
   @ApiBody({
     schema: {
       type: 'object',
-      required: ['file', 'version', 'channel'],
+      required: ['file', 'version'],
       properties: {
         file: { type: 'string', format: 'binary' },
         version: { type: 'string' },
         channel: { type: 'string', enum: ['stable', 'beta', 'hotfix'] },
+        status: { type: 'string', enum: ['draft', 'published', 'deprecated'] },
         notes: { type: 'string' },
       },
     },
@@ -96,10 +155,12 @@ export class ProjectsController {
     }),
   )
   async uploadRelease(
+    @Req() req: { user?: { role: string } },
     @Param('projectId') projectId: string,
     @UploadedFile() file: UploadedReleaseFile,
-    @Body() body: { version: string; channel: string; notes?: string },
+    @Body() body: { version: string; channel?: string; notes?: string; status?: string },
   ): Promise<ReleaseListItemDto> {
+    this.assertAdmin(req);
     return this.projectsService.createReleaseWithUpload(projectId, body, file);
   }
 
@@ -107,10 +168,24 @@ export class ProjectsController {
   @ApiParam({ name: 'projectId' })
   @ApiParam({ name: 'releaseId' })
   async promoteRelease(
+    @Req() req: { user?: { role: string } },
     @Param('projectId') projectId: string,
     @Param('releaseId') releaseId: string,
     @Body() body: PromoteReleaseRequestDto,
   ): Promise<ReleaseListItemDto> {
+    this.assertAdmin(req);
     return this.projectsService.promoteRelease(projectId, releaseId, body);
   }
+
+  private assertAdmin(req: { user?: { role: string } }): void {
+    if (req.user?.role !== 'admin') {
+      throw new ForbiddenException('admin_only');
+    }
+  }
 }
+
+
+
+
+
+

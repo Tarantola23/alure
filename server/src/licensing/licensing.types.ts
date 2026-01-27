@@ -153,6 +153,12 @@ export class CreateLicenseRequestDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @ApiPropertyOptional({ type: [String], example: ['telemetry', 'cloud_sync'] })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  module_keys?: string[];
 }
 
 export class CreateLicenseResponseDto {
@@ -200,6 +206,12 @@ export class BulkCreateLicensesRequestDto {
   @ArrayMinSize(1)
   @IsEmail({}, { each: true })
   recipients: string[];
+
+  @ApiPropertyOptional({ type: [String], example: ['telemetry', 'cloud_sync'] })
+  @IsArray()
+  @IsString({ each: true })
+  @IsOptional()
+  module_keys?: string[];
 }
 
 export class BulkCreateLicenseItemDto {
@@ -295,6 +307,140 @@ export class ActivationListItemDto {
   @ApiProperty()
   @IsString()
   created_at: string;
+
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  last_seen_at?: string;
+
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  hostname_masked?: string;
+}
+
+export class ActivationModuleItemDto {
+  @ApiProperty()
+  @IsString()
+  module_id: string;
+
+  @ApiProperty()
+  @IsString()
+  key: string;
+
+  @ApiProperty()
+  @IsString()
+  name: string;
+
+  @ApiProperty()
+  @IsBoolean()
+  enabled: boolean;
+
+  @ApiPropertyOptional()
+  @IsBoolean()
+  @IsOptional()
+  force_activation?: boolean;
+
+  @ApiPropertyOptional()
+  @IsBoolean()
+  @IsOptional()
+  force_deactivation?: boolean;
+
+  @ApiPropertyOptional({ type: Object })
+  @IsObject()
+  @IsOptional()
+  params?: Record<string, string>;
+}
+
+export class ActivationModulesResponseDto {
+  @ApiProperty({ type: [ActivationModuleItemDto] })
+  modules: ActivationModuleItemDto[];
+
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  new_receipt?: string;
+}
+
+export class LicenseModuleItemDto {
+  @ApiProperty()
+  @IsString()
+  module_id: string;
+
+  @ApiProperty()
+  @IsString()
+  key: string;
+
+  @ApiProperty()
+  @IsString()
+  name: string;
+
+  @ApiProperty()
+  @IsBoolean()
+  enabled: boolean;
+
+  @ApiPropertyOptional()
+  @IsBoolean()
+  @IsOptional()
+  force_activation?: boolean;
+
+  @ApiPropertyOptional()
+  @IsBoolean()
+  @IsOptional()
+  force_deactivation?: boolean;
+
+  @ApiPropertyOptional({ type: Object })
+  @IsObject()
+  @IsOptional()
+  params?: Record<string, string>;
+}
+
+export class LicenseModulesResponseDto {
+  @ApiProperty({ type: [LicenseModuleItemDto] })
+  modules: LicenseModuleItemDto[];
+}
+
+export class UpdateLicenseModuleItemDto {
+  @ApiProperty()
+  @IsString()
+  key: string;
+
+  @ApiPropertyOptional()
+  @IsBoolean()
+  @IsOptional()
+  force_activation?: boolean;
+
+  @ApiPropertyOptional()
+  @IsBoolean()
+  @IsOptional()
+  force_deactivation?: boolean;
+}
+
+export class UpdateLicenseModulesRequestDto {
+  @ApiProperty({ type: [UpdateLicenseModuleItemDto] })
+  @IsArray()
+  modules: UpdateLicenseModuleItemDto[];
+}
+
+export class UpdateActivationModulesRequestDto {
+  @ApiProperty({ type: [String] })
+  @IsArray()
+  @IsString({ each: true })
+  module_keys: string[];
+}
+
+export class RevealActivationHostnameRequestDto {
+  @ApiProperty()
+  @IsString()
+  @IsNotEmpty()
+  password: string;
+}
+
+export class RevealActivationHostnameResponseDto {
+  @ApiPropertyOptional()
+  @IsString()
+  @IsOptional()
+  hostname?: string;
 }
 
 export const CHANNELS = ['stable', 'beta', 'hotfix'] as const;

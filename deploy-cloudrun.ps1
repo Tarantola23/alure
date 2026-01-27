@@ -27,6 +27,7 @@ $yaml = $map.GetEnumerator() | Sort-Object Name | ForEach-Object {
 ($yaml -join "`n") | Set-Content $EnvYaml
 
 gcloud config set project $ProjectId
+gcloud builds submit --tag "gcr.io/$ProjectId/$ServiceName" .
 gcloud run deploy $ServiceName `
   --image "gcr.io/$ProjectId/$ServiceName" `
   --region $Region `

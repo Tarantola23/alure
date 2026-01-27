@@ -1,4 +1,4 @@
-import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
+﻿import { HttpException, HttpStatus, Injectable } from '@nestjs/common';
 import { readFile } from 'fs/promises';
 import jwt from 'jsonwebtoken';
 import {
@@ -24,12 +24,12 @@ export class UpdatesService {
 
     return this.prisma.$transaction(async (tx) => {
       const releaseRow = await tx.release.findFirst({
-        where: { projectId: query.project_id, channel: query.channel },
+        where: { projectId: query.project_id, channel: query.channel, status: 'published' },
         orderBy: { publishedAt: 'desc' },
         include: { asset: true },
       });
 
-      if (!releaseRow) {
+      if (!releaseRow || !releaseRow.channel || !releaseRow.publishedAt) {
         return {
           update_available: false,
           server_time: now.toISOString(),
@@ -163,3 +163,4 @@ export class UpdatesService {
     throw new HttpException('missing_token', HttpStatus.UNAUTHORIZED);
   }
 }
+

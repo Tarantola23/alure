@@ -92,8 +92,11 @@ class AlureClient:
         }
         if app_version:
             payload["app_version"] = app_version
-        if device_meta:
-            payload["device_meta"] = device_meta
+        meta = device_meta.copy() if device_meta else {}
+        if "hostname" not in meta:
+            meta["hostname"] = platform.node()
+        if meta:
+            payload["device_meta"] = meta
         data = self._request("POST", "/licenses/activate", payload)
         record = ReceiptRecord(
             receipt=data["receipt"],
@@ -117,7 +120,17 @@ class AlureClient:
                 raise HttpError(400, "missing_receipt")
             receipt = receipt or stored.receipt
             device_id = device_id or stored.device_id
-        return self._request("POST", "/licenses/verify", {"receipt": receipt, "device_id": device_id})
+        data = self._request("POST", "/licenses/verify", {"receipt": receipt, "device_id": device_id})
+        new_receipt = data.get("new_receipt")
+        if new_receipt:
+            record = ReceiptRecord(
+                receipt=new_receipt,
+                device_id=device_id,
+                activation_id=(stored.activation_id if stored else None),
+                project_id=self._extract_project_id(new_receipt),
+            )
+            self.storage.save_receipt(record)
+        return data
 
     def verify_offline(
         self,
@@ -150,6 +163,18 @@ class AlureClient:
             return payload.get("project_id")
         except Exception:
             return None
+
+    def modules_from_receipt(self, receipt: str | None = None) -> list[dict[str, Any]]:
+        if receipt is None:
+            stored = self.storage.load_receipt()
+            if not stored:
+                return []
+            receipt = stored.receipt
+        try:
+            payload = self.verifier.parse(receipt)
+            return payload.get("modules") or []
+        except Exception:
+            return []
 
     def request_download_token(self, receipt: str, device_id: str, asset_id: str) -> dict[str, Any]:
         return self._request(

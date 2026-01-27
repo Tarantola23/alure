@@ -13,6 +13,12 @@ enum Channel {
   hotfix
 }
 
+enum ReleaseStatus {
+  draft
+  published
+  deprecated
+}
+
 model Project {
   id         String    @id @default(cuid())
   name       String    @unique
@@ -20,6 +26,7 @@ model Project {
   updatedAt  DateTime  @updatedAt
   licenses   License[]
   releases   Release[]
+  modules    ProjectModule[]
 }
 
 model License {
@@ -38,6 +45,7 @@ model License {
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   activations    Activation[]
+  modules        LicenseModule[]
 }
 
 model Activation {
@@ -47,21 +55,72 @@ model Activation {
   deviceIdHash String
   receiptHash  String   @unique
   revoked      Boolean  @default(false)
+  modulesRestricted Boolean @default(false)
+  hostnameEnc  String?
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+  lastSeenAt   DateTime?
+  modules      ActivationModule[]
+}
+
+model ProjectModule {
+  id          String   @id @default(cuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  key         String
+  name        String
+  description String?
+  params      Json?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  licenses    LicenseModule[]
+  activations ActivationModule[]
+
+  @@unique([projectId, key])
+}
+
+model LicenseModule {
+  id        String        @id @default(cuid())
+  licenseId String
+  license   License       @relation(fields: [licenseId], references: [id], onDelete: Cascade)
+  moduleId  String
+  module    ProjectModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  params    Json?
+  forceActivation Boolean @default(false)
+  forceDeactivation Boolean @default(false)
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  @@unique([licenseId, moduleId])
+}
+
+model ActivationModule {
+  id           String        @id @default(cuid())
+  activationId String
+  activation   Activation    @relation(fields: [activationId], references: [id], onDelete: Cascade)
+  moduleId     String
+  module       ProjectModule @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+  params       Json?
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@unique([activationId, moduleId])
 }
 
 model Release {
-  id          String    @id @default(cuid())
+  id          String        @id @default(cuid())
   projectId   String
-  project     Project   @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project     Project       @relation(fields: [projectId], references: [id], onDelete: Cascade)
   version     String
-  channel     Channel
+  channel     Channel?
+  status      ReleaseStatus @default(published)
   notes       String?
-  publishedAt DateTime  @default(now())
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  publishedAt DateTime?
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
   asset       Asset?
+
+  @@unique([projectId, version])
 }
 
 model Asset {
@@ -94,6 +153,7 @@ model UserInvite {
   userId    String
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   tokenHash String   @unique
+  tempPasswordHash String?
   expiresAt DateTime
   usedAt    DateTime?
   createdAt DateTime @default(now())
@@ -125,3 +185,4 @@ model SmtpSettings {
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt
 }
+

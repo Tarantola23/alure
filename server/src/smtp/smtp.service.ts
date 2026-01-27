@@ -234,7 +234,7 @@ export class SmtpService {
         <h2 style="margin: 0 0 8px; font-size: 18px;">You've been invited</h2>
         <p style="margin: 0 0 14px; color:#5f6b7a;">${greeting} your Alure account is ready.</p>
         <div style="padding: 12px 14px; border-radius: 12px; background:#f3f7fb; border:1px solid rgba(31, 86, 99, 0.2);">
-          <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; color:#5f6b7a;">Temporary password</div>
+          <div style="font-size: 12px; text-transform: uppercase; letter-spacing: 0.4px; color:#5f6b7a;">Temporary code</div>
           <div style="font-family: 'Courier New', monospace; font-size: 16px; margin-top: 6px;">${payload.temporaryPassword}</div>
         </div>
         <p style="margin: 16px 0 6px; font-size: 13px;">Set a new password using this link (valid until ${expiresLabel}):</p>
@@ -242,7 +242,7 @@ export class SmtpService {
         <p style="margin-top: 16px; font-size: 12px; color:#7b8794;">If you did not expect this invite, you can ignore this email.</p>
       </div>
     `;
-    const text = `Alure invite\n\nTemporary password: ${payload.temporaryPassword}\nSet a new password (valid until ${expiresLabel}): ${payload.inviteUrl}\n`;
+    const text = `Alure invite\n\nTemporary code: ${payload.temporaryPassword}\nSet a new password (valid until ${expiresLabel}): ${payload.inviteUrl}\n`;
 
     await transport.sendMail({
       from: fromLabel,

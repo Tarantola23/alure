@@ -3,6 +3,7 @@ import urllib.error
 from datetime import datetime, timezone
 from pathlib import Path
 import platform
+from alure_sdk.ui import activate_with_ui
 
 
 def ensure_license(client: AlureClient) -> bool:
@@ -74,16 +75,33 @@ def print_expiry(client: AlureClient) -> None:
     print(f"License expires in {days} day(s), {hours} hour(s).")
 
 
+def print_modules(client: AlureClient) -> None:
+    modules = client.modules_from_receipt()
+    if not modules:
+        print("Modules: none")
+        return
+    print("Modules:")
+    for item in modules:
+        key = item.get("key") or "unknown"
+        params = item.get("params") or {}
+        if params:
+            print(f"  - {key} ({params})")
+        else:
+            print(f"  - {key}")
+
+
 def main() -> None:
     base_dir = Path(__file__).resolve().parent / ".alure-client"
     client = AlureClient(
-        base_url="https://api.alure.it/api/v1",
+        base_url="http://localhost:3000/api/v1",
         storage=FileStorage(base_dir),
     )
+    
 
     if ensure_license(client):
         print("Hello world!")
         print_expiry(client)
+        print_modules(client)
         project_id = client.project_id_from_receipt()
         if project_id:
             version_file = Path("./.alure-client/installed_version.txt")
@@ -114,6 +132,7 @@ def main() -> None:
     if activate_flow(client):
         print("Hello world!")
         print_expiry(client)
+        print_modules(client)
     else:
         print("Unable to activate license.")
 
