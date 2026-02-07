@@ -1,6 +1,6 @@
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use chrono::{DateTime, Duration, Utc};
-use ed25519_dalek::{Signature, VerifyingKey};
+use ed25519_dalek::{Signature, VerifyingKey, Verifier};
 use pkcs8::DecodePublicKey;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};

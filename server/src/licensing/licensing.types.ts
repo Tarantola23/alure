@@ -4,7 +4,6 @@ import {
   ArrayMinSize,
   IsArray,
   IsBoolean,
-  IsEmail,
   IsIn,
   IsInt,
   IsNotEmpty,
@@ -69,6 +68,11 @@ export class VerifyRequestDto {
   @IsString()
   @IsNotEmpty()
   device_id: string;
+
+  @ApiPropertyOptional({ type: Object })
+  @IsObject()
+  @IsOptional()
+  device_meta?: Record<string, unknown>;
 }
 
 export class VerifyResponseDto {
@@ -201,10 +205,10 @@ export class BulkCreateLicensesRequestDto {
   @IsString()
   notes?: string;
 
-  @ApiProperty({ type: [String], example: ['user1@example.com', 'user2@example.com'] })
+  @ApiProperty({ type: [String], example: ['user1@example.com', 'Mario Rossi'] })
   @IsArray()
   @ArrayMinSize(1)
-  @IsEmail({}, { each: true })
+  @IsString({ each: true })
   recipients: string[];
 
   @ApiPropertyOptional({ type: [String], example: ['telemetry', 'cloud_sync'] })
@@ -212,6 +216,11 @@ export class BulkCreateLicensesRequestDto {
   @IsString({ each: true })
   @IsOptional()
   module_keys?: string[];
+
+  @ApiPropertyOptional({ example: true, default: true })
+  @IsBoolean()
+  @IsOptional()
+  send_email?: boolean;
 }
 
 export class BulkCreateLicenseItemDto {

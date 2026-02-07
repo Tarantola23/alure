@@ -113,9 +113,16 @@ impl AlureClient {
         if let Some(app_version) = app_version {
             payload["app_version"] = serde_json::Value::String(app_version);
         }
-        if let Some(meta) = device_meta {
-            payload["device_meta"] = meta;
-        }
+        let meta = match device_meta {
+            Some(meta) => meta,
+            None => {
+                let host = hostname::get()
+                    .map(|value| value.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| "unknown".to_string());
+                serde_json::json!({ "hostname": host })
+            }
+        };
+        payload["device_meta"] = meta;
         let data: serde_json::Value = self
             .request(
                 reqwest::Method::POST,
@@ -169,31 +176,45 @@ impl AlureClient {
         receipt: Option<String>,
         device_id: Option<String>,
     ) -> Result<serde_json::Value, AlureError> {
+        let stored = self.storage.load_receipt()?;
         let (receipt, device_id) = match (receipt, device_id) {
             (Some(receipt), Some(device_id)) => (receipt, device_id),
             _ => {
-                let stored = self
-                    .storage
-                    .load_receipt()?
-                    .ok_or_else(|| AlureError::Http {
-                        status: 400,
-                        message: "missing_receipt".to_string(),
-                    })?;
+                let stored = stored.clone().ok_or_else(|| AlureError::Http {
+                    status: 400,
+                    message: "missing_receipt".to_string(),
+                })?;
                 (stored.receipt, stored.device_id)
             }
         };
         let payload = serde_json::json!({
             "receipt": receipt,
             "device_id": device_id,
+            "device_meta": {
+                "hostname": hostname::get()
+                    .map(|value| value.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| "unknown".to_string())
+            }
         });
-        self.request(
+        let data: serde_json::Value = self
+            .request(
             reqwest::Method::POST,
             "/licenses/verify",
             Some(payload),
             None,
             None,
         )
-        .await
+        .await?;
+        if let Some(new_receipt) = data.get("new_receipt").and_then(|value| value.as_str()) {
+            let record = ReceiptRecord {
+                receipt: new_receipt.to_string(),
+                device_id: device_id.clone(),
+                activation_id: stored.and_then(|item| item.activation_id),
+                project_id: self.extract_project_id(new_receipt).ok().flatten(),
+            };
+            self.storage.save_receipt(&record)?;
+        }
+        Ok(data)
     }
 
     pub fn verify_offline(
@@ -221,6 +242,196 @@ impl AlureClient {
         Ok(self
             .verifier
             .validate_offline(&receipt, &device_id, None, verify_signature))
+    }
+
+    pub fn modules_from_receipt(
+        &self,
+        receipt: Option<String>,
+    ) -> Result<Vec<serde_json::Value>, AlureError> {
+        let receipt = match receipt {
+            Some(receipt) => receipt,
+            None => {
+                let stored = self.storage.load_receipt()?;
+                if let Some(stored) = stored {
+                    stored.receipt
+                } else {
+                    return Ok(Vec::new());
+                }
+            }
+        };
+        let payload = match self.verifier.parse(&receipt) {
+            Ok(payload) => payload,
+            Err(_) => return Ok(Vec::new()),
+        };
+        let modules = payload
+            .get("modules")
+            .and_then(|value| value.as_array())
+            .map(|items| items.iter().cloned().collect::<Vec<_>>())
+            .unwrap_or_default();
+        Ok(modules)
+    }
+
+    pub fn enabled_modules(&self, receipt: Option<String>) -> Result<Vec<String>, AlureError> {
+        let modules = self.modules_from_receipt(receipt)?;
+        let mut keys = Vec::new();
+        for module in modules {
+            if let Some(key) = module.get("key").and_then(|value| value.as_str()) {
+                keys.push(key.to_string());
+            }
+        }
+        keys.sort();
+        keys.dedup();
+        Ok(keys)
+    }
+
+    pub async fn ensure_active(
+        &self,
+        license_key: Option<String>,
+        device_id: Option<String>,
+        allow_offline: bool,
+        verify_signature: bool,
+        app_version: Option<String>,
+        device_meta: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, AlureError> {
+        if let Some(stored) = self.storage.load_receipt()? {
+            let receipt = stored.receipt.clone();
+            let device_id = stored.device_id.clone();
+            match self
+                .verify_online(Some(receipt.clone()), Some(device_id.clone()))
+                .await
+            {
+                Ok(mut online) => {
+                    online["source"] = serde_json::json!("online");
+                    let valid = online
+                        .get("valid")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false);
+                    if valid || license_key.is_none() {
+                        return Ok(online);
+                    }
+                }
+                Err(err) => {
+                    if allow_offline {
+                        let offline = self.verify_offline(
+                            Some(receipt),
+                            Some(device_id),
+                            verify_signature,
+                        )?;
+                        if offline.valid || license_key.is_none() {
+                            return Ok(serde_json::json!({
+                                "valid": offline.valid,
+                                "reason": offline.reason,
+                                "source": "offline",
+                            }));
+                        }
+                    } else {
+                        return Err(err);
+                    }
+                }
+            }
+        }
+
+        let license_key = match license_key {
+            Some(key) => key,
+            None => {
+                return Ok(serde_json::json!({
+                    "valid": false,
+                    "reason": "missing_license_or_receipt",
+                    "source": "local",
+                }))
+            }
+        };
+
+        match self
+            .activate(&license_key, device_id, app_version, device_meta)
+            .await
+        {
+            Ok(_) => {
+                let mut online = self.verify_online(None, None).await?;
+                online["source"] = serde_json::json!("activate");
+                Ok(online)
+            }
+            Err(AlureError::Http { status, message }) if status == 409 && message.contains("activation_already_exists") => {
+                if let Some(stored) = self.storage.load_receipt()? {
+                    let mut online = self
+                        .verify_online(Some(stored.receipt), Some(stored.device_id))
+                        .await?;
+                    online["source"] = serde_json::json!("existing_activation");
+                    Ok(online)
+                } else {
+                    Ok(serde_json::json!({
+                        "valid": false,
+                        "reason": "activation_already_exists",
+                        "source": "activate",
+                    }))
+                }
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn quickstart(
+        &self,
+        license_key: Option<String>,
+        device_id: Option<String>,
+        allow_offline: bool,
+        verify_signature: bool,
+        app_version: Option<String>,
+        device_meta: Option<serde_json::Value>,
+    ) -> Result<serde_json::Value, AlureError> {
+        let mut result = self
+            .ensure_active(
+                license_key,
+                device_id,
+                allow_offline,
+                verify_signature,
+                app_version,
+                device_meta,
+            )
+            .await?;
+        let modules = self.enabled_modules(None)?;
+        let modules_full = self.modules_from_receipt(None)?;
+        result["modules"] = serde_json::json!(modules);
+        result["modules_full"] = serde_json::json!(modules_full);
+        Ok(result)
+    }
+
+    pub async fn check_update_and_download(
+        &self,
+        project_id: &str,
+        channel: &str,
+        current_version: Option<String>,
+        receipt: Option<String>,
+        device_id: Option<String>,
+    ) -> Result<serde_json::Value, AlureError> {
+        let update = self.check_update(project_id, channel, current_version).await?;
+        if update
+            .get("update_available")
+            .and_then(|value| value.as_bool())
+            != Some(true)
+        {
+            return Ok(serde_json::json!({ "update_available": false }));
+        }
+        let asset_id = update
+            .get("asset")
+            .and_then(|asset| asset.get("asset_id"))
+            .and_then(|value| value.as_str())
+            .map(str::to_string);
+        if let Some(asset_id) = asset_id {
+            let path = self
+                .download_asset(&asset_id, receipt, device_id, None, None)
+                .await?;
+            Ok(serde_json::json!({
+                "update_available": true,
+                "asset": update.get("asset"),
+                "download_path": path.to_string_lossy(),
+            }))
+        } else {
+            Ok(serde_json::json!({
+                "update_available": true,
+                "asset": update.get("asset"),
+            }))
+        }
     }
 
     pub async fn check_update(
@@ -335,13 +546,13 @@ impl AlureClient {
                 message,
             });
         }
-        let content = resp.bytes().await?;
         let filename = resp
             .headers()
             .get(reqwest::header::CONTENT_DISPOSITION)
             .and_then(|value| value.to_str().ok())
             .and_then(extract_filename)
             .unwrap_or_else(|| format!("{asset_id}.bin"));
+        let content = resp.bytes().await?;
         let target = match dest_path {
             Some(path) => path,
             None => {

@@ -1,7 +1,12 @@
 [package]
 name = "alure-sdk"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
+description = "Alure Rust SDK for licensing and updates"
+license = "MIT"
+repository = "https://github.com/alure-ai/alure"
+homepage = "https://github.com/alure-ai/alure"
+readme = "README.md"
 
 [dependencies]
 base64 = "0.21"

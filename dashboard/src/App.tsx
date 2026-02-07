@@ -210,12 +210,25 @@ const fetchJson = async <T,>(url: string, options?: RequestInit): Promise<T> => 
       window.localStorage.setItem(SESSION_EXPIRED_KEY, 'true')
       window.dispatchEvent(new CustomEvent('alure:unauthorized'))
     }
-    throw new Error(`HTTP ${res.status}`)
+    let detail = ''
+    try {
+      const body = (await res.json()) as { message?: string | string[]; error?: string }
+      if (Array.isArray(body.message)) {
+        detail = body.message.join(', ')
+      } else if (typeof body.message === 'string') {
+        detail = body.message
+      } else if (typeof body.error === 'string') {
+        detail = body.error
+      }
+    } catch {
+      // ignore response parse issues
+    }
+    throw new Error(detail ? `HTTP ${res.status}: ${detail}` : `HTTP ${res.status}`)
   }
   return res.json() as Promise<T>
 }
 
-const downloadWithAuth = async (downloadUrl: string): Promise<void> => {
+const downloadWithAuth = async (downloadUrl: string, preferredFilename?: string): Promise<void> => {
   const token = window.localStorage.getItem(TOKEN_KEY)
   const url = downloadUrl.startsWith('http') ? downloadUrl : `${API_ORIGIN}${downloadUrl}`
   const res = await fetch(url, {
@@ -227,7 +240,16 @@ const downloadWithAuth = async (downloadUrl: string): Promise<void> => {
   const blob = await res.blob()
   const disposition = res.headers.get('content-disposition') ?? ''
   const match = disposition.match(/filename="?([^"]+)"?$/i)
-  const filename = match?.[1] ?? 'download'
+  const urlFilename = (() => {
+    try {
+      const parsed = new URL(url)
+      const path = parsed.pathname.split('/').pop()
+      return path && path.trim() ? decodeURIComponent(path) : undefined
+    } catch {
+      return undefined
+    }
+  })()
+  const filename = match?.[1] ?? preferredFilename ?? urlFilename ?? 'download'
   const blobUrl = URL.createObjectURL(blob)
   const link = document.createElement('a')
   link.href = blobUrl
@@ -236,6 +258,12 @@ const downloadWithAuth = async (downloadUrl: string): Promise<void> => {
   link.click()
   link.remove()
   URL.revokeObjectURL(blobUrl)
+}
+
+const formatIdentifier = (value: string, start = 10, end = 6): string => {
+  if (!value) return '-'
+  if (value.length <= start + end + 3) return value
+  return `${value.slice(0, start)}...${value.slice(-end)}`
 }
 
 function LoginGate({ children }: { children: React.ReactNode }) {
@@ -1579,15 +1607,23 @@ function LicensesSection() {
   const [licensePage, setLicensePage] = useState(1)
   const [licensePageSize, setLicensePageSize] = useState(10)
   const [expandedBulkGroups, setExpandedBulkGroups] = useState<Record<string, boolean>>({})
-  const [showCreateForm, setShowCreateForm] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth > 960))
-  const [showBulkForm, setShowBulkForm] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth > 960))
-  const [showLicenseFilters, setShowLicenseFilters] = useState(() => (typeof window === 'undefined' ? true : window.innerWidth > 960))
+  const [licenseListView, setLicenseListView] = useState<'single' | 'bulk'>('single')
+  const [showLicenseFilters, setShowLicenseFilters] = useState(false)
   const [licenseModules, setLicenseModules] = useState<LicenseModuleItem[]>([])
   const [licenseModuleLicenseId, setLicenseModuleLicenseId] = useState<string | null>(null)
   const [licenseModuleModalOpen, setLicenseModuleModalOpen] = useState(false)
   const [licenseModuleMessage, setLicenseModuleMessage] = useState<string | null>(null)
   const [licenseModuleError, setLicenseModuleError] = useState<string | null>(null)
   const [licenseModuleSaving, setLicenseModuleSaving] = useState(false)
+  const [projectModules, setProjectModules] = useState<ProjectModule[]>([])
+  const [projectModulesError, setProjectModulesError] = useState<string | null>(null)
+  const [createError, setCreateError] = useState<string | null>(null)
+  const [wizardOpen, setWizardOpen] = useState(false)
+  const [wizardStep, setWizardStep] = useState(1)
+  const [wizardMode, setWizardMode] = useState<'single' | 'bulk'>('single')
+  const [createModuleKeys, setCreateModuleKeys] = useState<string[]>([])
+  const [bulkModuleKeys, setBulkModuleKeys] = useState<string[]>([])
+  const [bulkSendEmail, setBulkSendEmail] = useState(true)
   const navigate = useNavigate()
 
   const loadLicenses = async (id: string) => {
@@ -1613,6 +1649,20 @@ function LicensesSection() {
       next[item.id] = item.count
     })
     setActivationCounts(next)
+  }
+
+  const loadProjectModules = async (id: string) => {
+    try {
+      const data = await fetchJson<ProjectModule[]>(`${API_BASE}/projects/${id}/modules`)
+      setProjectModules(data)
+      setProjectModulesError(null)
+    } catch (error) {
+      if (error instanceof Error) {
+        setProjectModulesError(`Unable to load project modules (${error.message}).`)
+        return
+      }
+      setProjectModulesError('Unable to load project modules.')
+    }
   }
 
   const forceValue = (module: LicenseModuleItem) => {
@@ -1645,6 +1695,15 @@ function LicensesSection() {
           ? { ...module, enabled: !module.enabled }
           : module,
       ),
+    )
+  }
+
+  const setLicenseModulesEnabled = (nextEnabled: boolean) => {
+    setLicenseModules((prev) =>
+      prev.map((module) => {
+        if (module.force_activation || module.force_deactivation) return module
+        return { ...module, enabled: nextEnabled }
+      }),
     )
   }
 
@@ -1704,12 +1763,15 @@ function LicensesSection() {
 
   const revokeFromModules = async () => {
     if (!licenseModuleLicenseId) return
+    const confirmed = window.confirm('Revoke this license and all related activations? This action cannot be undone.')
+    if (!confirmed) return
     await handleRevokeLicense(licenseModuleLicenseId)
     setLicenseModuleModalOpen(false)
   }
 
   const handleCreateLicense = async () => {
     if (!projectId) return
+    setCreateError(null)
     const parsedMax = Number(licenseMaxActivations)
     const payload = {
       project_id: projectId,
@@ -1717,24 +1779,36 @@ function LicensesSection() {
       max_activations: Number.isNaN(parsedMax) ? 1 : parsedMax,
       duration_days: licenseDurationDays ? Number(licenseDurationDays) : undefined,
       notes: licenseNotes.trim() || undefined,
+      module_keys: createModuleKeys.length > 0 ? createModuleKeys : undefined,
     }
-    const response = await fetchJson<{ license_id: string; license_key: string }>(
-      `${API_BASE}/licenses`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      },
-    )
-    setLastCreatedKey(response.license_key)
-    const selected = plans.find((plan) => plan.name === licensePlan)
-    setLicenseDurationDays(
-      selected?.duration_days_default && selected.duration_days_default > 0
-        ? String(selected.duration_days_default)
-        : '',
-    )
-    setLicenseNotes('')
-    await loadLicenses(projectId)
+    try {
+      const response = await fetchJson<{ license_id: string; license_key: string }>(
+        `${API_BASE}/licenses`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        },
+      )
+      setLastCreatedKey(response.license_key)
+      const selected = plans.find((plan) => plan.name === licensePlan)
+      setLicenseDurationDays(
+        selected?.duration_days_default && selected.duration_days_default > 0
+          ? String(selected.duration_days_default)
+          : '',
+      )
+      setLicenseNotes('')
+      setCreateModuleKeys([])
+      setWizardStep(1)
+      setWizardOpen(false)
+      await loadLicenses(projectId)
+    } catch (error) {
+      if (error instanceof Error) {
+        setCreateError(`Unable to create license (${error.message}).`)
+        return
+      }
+      setCreateError('Unable to create license.')
+    }
   }
 
   const handleRevokeLicense = async (licenseId: string) => {
@@ -1755,6 +1829,35 @@ function LicensesSection() {
     } catch {
       return
     }
+  }
+
+  const escapeCsv = (value: string): string => {
+    const raw = value ?? ''
+    if (raw.includes('"') || raw.includes(',') || raw.includes('\n')) {
+      return `"${raw.replace(/"/g, '""')}"`
+    }
+    return raw
+  }
+
+  const downloadBulkCsv = () => {
+    if (!bulkResult || bulkResult.created.length === 0) return
+    const lines = [
+      'email,license_id,license_key',
+      ...bulkResult.created.map((item) =>
+        [item.email, item.license_id, item.license_key].map(escapeCsv).join(','),
+      ),
+    ]
+    const csv = lines.join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+    link.href = url
+    link.download = `alure-bulk-licenses-${stamp}.csv`
+    document.body.appendChild(link)
+    link.click()
+    link.remove()
+    URL.revokeObjectURL(url)
   }
 
   const isExpired = (license: License) => {
@@ -1825,10 +1928,20 @@ function LicensesSection() {
       setBulkError('Add at least one recipient email.')
       return
     }
-    if (!smtpVerified) {
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+    if (bulkSendEmail) {
+      const invalidRecipients = recipients.filter((email) => !emailRegex.test(email))
+      if (invalidRecipients.length > 0) {
+        setBulkError(`Invalid recipient email(s): ${invalidRecipients.join(', ')}`)
+        return
+      }
+    }
+    if (bulkSendEmail && !smtpVerified) {
       setBulkError('SMTP must be verified before sending licenses.')
       return
     }
+    const validModuleKeySet = new Set(projectModules.map((module) => module.key))
+    const sanitizedModuleKeys = bulkModuleKeys.filter((key) => validModuleKeySet.has(key))
     const parsedMax = Number(bulkMaxActivations)
     const payload = {
       project_id: projectId,
@@ -1837,6 +1950,8 @@ function LicensesSection() {
       duration_days: bulkDurationDays ? Number(bulkDurationDays) : undefined,
       notes: bulkNotes.trim() || undefined,
       recipients,
+      module_keys: sanitizedModuleKeys.length > 0 ? sanitizedModuleKeys : undefined,
+      send_email: bulkSendEmail,
     }
     setBulkError(null)
     setBulkMessage(null)
@@ -1850,6 +1965,9 @@ function LicensesSection() {
       setBulkMessage(`Created ${response.created.length}, failed ${response.failed.length}.`)
       setBulkRecipients('')
       setBulkNotes('')
+      setBulkModuleKeys([])
+      setWizardStep(1)
+      setWizardOpen(false)
       await loadLicenses(projectId)
     } catch (error) {
       if (error instanceof Error) {
@@ -1863,6 +1981,7 @@ function LicensesSection() {
   useEffect(() => {
     if (!projectId) return
     void loadLicenses(projectId)
+    void loadProjectModules(projectId)
     void loadPlans()
     if (!smtpLoaded) {
       void loadSmtpStatus()
@@ -1872,8 +1991,6 @@ function LicensesSection() {
   useEffect(() => {
     const handleResize = () => {
       if (window.innerWidth > 960) {
-        setShowCreateForm(true)
-        setShowBulkForm(true)
         setShowLicenseFilters(true)
       }
     }
@@ -1995,8 +2112,8 @@ function LicensesSection() {
     Array.from(
       new Set(
         value
-          .split(/[\s,;]+/)
-          .map((email) => email.trim().toLowerCase())
+          .split(/[\n,;]+/)
+          .map((recipient) => recipient.trim())
           .filter(Boolean),
       ),
     )
@@ -2005,6 +2122,24 @@ function LicensesSection() {
     () => parseRecipients(bulkRecipients),
     [bulkRecipients],
   )
+  const openWizard = (mode: 'single' | 'bulk') => {
+    setCreateError(null)
+    setBulkError(null)
+    setBulkMessage(null)
+    setWizardMode(mode)
+    setWizardStep(1)
+    setWizardOpen(true)
+  }
+  const toggleCreateModule = (key: string) => {
+    setCreateModuleKeys((prev) =>
+      prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key],
+    )
+  }
+  const toggleBulkModule = (key: string) => {
+    setBulkModuleKeys((prev) =>
+      prev.includes(key) ? prev.filter((item) => item !== key) : [...prev, key],
+    )
+  }
   const moduleLicense = licenses.find((license) => license.license_id === licenseModuleLicenseId) ?? null
   const moduleLicenseRevoked = moduleLicense ? moduleLicense.revoked || isExpired(moduleLicense) : false
 
@@ -2039,63 +2174,20 @@ function LicensesSection() {
         <div className="card">
           <div className="card-header">
             <div>
-              <h2>Create license</h2>
-              <span className="muted">Generate keys for this project.</span>
+              <h2>License wizard</h2>
+              <span className="muted">Use the wizard (Single or Bulk) to create licenses.</span>
             </div>
-            <button
-              className="icon-button"
-              onClick={() => setShowCreateForm((prev) => !prev)}
-              aria-label="Toggle create license"
-              title="Toggle create license"
-            >
-              <i className={showCreateForm ? 'fa-solid fa-minus' : 'fa-solid fa-plus'} />
-            </button>
+            <span className="status-line">
+              <span className={`status-dot ${smtpVerified ? 'ok' : 'offline'}`} />
+              <span>{smtpVerified ? 'SMTP verified' : 'SMTP required for send mail'}</span>
+            </span>
           </div>
-          <div className={`form license-form collapse-body ${showCreateForm ? '' : 'is-collapsed'}`}>
-            <label className="field">
-              <span>Plan</span>
-              <select value={licensePlan} onChange={(event) => handlePlanChange(event.target.value)}>
-                {plans.length === 0 && <option value="basic">basic</option>}
-                {plans.map((plan) => (
-                  <option key={plan.id} value={plan.name}>
-                    {plan.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {plansError && <div className="error">{plansError}</div>}
-            <label className="field">
-              <span>Max activations</span>
-              <input
-                type="number"
-                min={0}
-                value={licenseMaxActivations}
-                onChange={(event) => setLicenseMaxActivations(Number(event.target.value))}
-                placeholder="0 = unlimited"
-              />
-            </label>
-            <label className="field">
-              <span>Duration (days)</span>
-              <input
-                type="number"
-                min={1}
-                value={licenseDurationDays}
-                onChange={(event) => setLicenseDurationDays(event.target.value)}
-                placeholder="Leave empty for unlimited"
-              />
-            </label>
-            <label className="field">
-              <span>Notes</span>
-              <input
-                type="text"
-                value={licenseNotes}
-                onChange={(event) => setLicenseNotes(event.target.value)}
-                placeholder="Customer or internal notes"
-              />
-            </label>
-            <button className="primary" onClick={handleCreateLicense}>
-              Create license key
+          <div className="form">
+            <button className="primary" onClick={() => openWizard('single')}>
+              Open guided wizard
             </button>
+            {plansError && <div className="error">{plansError}</div>}
+            {createError && <div className="error">{createError}</div>}
             {lastCreatedKey && (
               <div className="notice">
                 <span>New key</span>
@@ -2105,90 +2197,11 @@ function LicensesSection() {
                 </div>
               </div>
             )}
-          </div>
-        </div>
-        <div className="card">
-          <div className="card-header">
-            <div>
-              <h2>Bulk licenses</h2>
-              <span className="muted">Create and email multiple licenses.</span>
-            </div>
-            <span className="status-line">
-              <span className={`status-dot ${smtpVerified ? 'ok' : 'offline'}`} />
-              <span>{smtpVerified ? 'SMTP verified' : 'SMTP required'}</span>
-            </span>
-            <button
-              className="icon-button"
-              onClick={() => setShowBulkForm((prev) => !prev)}
-              aria-label="Toggle bulk licenses"
-              title="Toggle bulk licenses"
-            >
-              <i className={showBulkForm ? 'fa-solid fa-minus' : 'fa-solid fa-plus'} />
-            </button>
-          </div>
-          <div className={`form bulk-license-form collapse-body ${showBulkForm ? '' : 'is-collapsed'}`}>
-            <label className="field full">
-              <span>Recipients</span>
-              <textarea
-                rows={4}
-                value={bulkRecipients}
-                onChange={(event) => setBulkRecipients(event.target.value)}
-                placeholder="one email per line, or comma-separated"
-              />
-              <span className="muted">{bulkRecipientList.length} recipients detected</span>
-            </label>
-            <label className="field">
-              <span>Plan</span>
-              <select value={bulkPlan} onChange={(event) => handleBulkPlanChange(event.target.value)}>
-                {plans.length === 0 && <option value="basic">basic</option>}
-                {plans.map((plan) => (
-                  <option key={plan.id} value={plan.name}>
-                    {plan.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="field">
-              <span>Max activations</span>
-              <input
-                type="number"
-                min={0}
-                value={bulkMaxActivations}
-                onChange={(event) => setBulkMaxActivations(Number(event.target.value))}
-                placeholder="0 = unlimited"
-              />
-            </label>
-            <label className="field">
-              <span>Duration (days)</span>
-              <input
-                type="number"
-                min={1}
-                value={bulkDurationDays}
-                onChange={(event) => setBulkDurationDays(event.target.value)}
-                placeholder="Leave empty for unlimited"
-              />
-            </label>
-            <label className="field">
-              <span>Notes</span>
-              <input
-                type="text"
-                value={bulkNotes}
-                onChange={(event) => setBulkNotes(event.target.value)}
-                placeholder="Optional batch note"
-              />
-            </label>
-            {!smtpVerified && smtpLoaded && (
-              <div className="notice warn">Verify SMTP settings before sending licenses.</div>
-            )}
-            <button
-              className="primary"
-              onClick={handleBulkCreate}
-              disabled={!smtpVerified || bulkRecipientList.length === 0}
-            >
-              Create & send licenses
-            </button>
-            {bulkError && <div className="error">{bulkError}</div>}
-            {bulkMessage && <div className="notice">{bulkMessage}</div>}
+            {bulkResult?.created.length ? (
+              <button className="ghost" onClick={downloadBulkCsv}>
+                Download CSV keys
+              </button>
+            ) : null}
             {bulkResult?.failed.length ? (
               <div className="bulk-result">
                 <span className="muted">Failed recipients</span>
@@ -2211,6 +2224,20 @@ function LicensesSection() {
               <span className="muted">Single licenses and bulk batches.</span>
             </div>
             <div className="card-actions">
+              <div className="view-toggle">
+                <button
+                  className={`ghost ${licenseListView === 'single' ? 'active' : ''}`}
+                  onClick={() => setLicenseListView('single')}
+                >
+                  Single
+                </button>
+                <button
+                  className={`ghost ${licenseListView === 'bulk' ? 'active' : ''}`}
+                  onClick={() => setLicenseListView('bulk')}
+                >
+                  Bulk batches
+                </button>
+              </div>
               <button
                 className="ghost collapse-toggle"
                 onClick={() => setShowLicenseFilters((prev) => !prev)}
@@ -2262,124 +2289,130 @@ function LicensesSection() {
                   <option value="expires_desc">Expiry far</option>
                 </select>
               </label>
-              <label className="field">
-                <span>Rows</span>
-                <select
-                  value={licensePageSize}
-                  onChange={(event) => {
-                    setLicensePageSize(Number(event.target.value))
-                    setLicensePage(1)
-                  }}
-                >
-                  <option value={10}>10</option>
-                  <option value={25}>25</option>
-                  <option value={50}>50</option>
-                </select>
-              </label>
+              {licenseListView === 'single' && (
+                <label className="field">
+                  <span>Rows</span>
+                  <select
+                    value={licensePageSize}
+                    onChange={(event) => {
+                      setLicensePageSize(Number(event.target.value))
+                      setLicensePage(1)
+                    }}
+                  >
+                    <option value={10}>10</option>
+                    <option value={25}>25</option>
+                    <option value={50}>50</option>
+                  </select>
+                </label>
+              )}
             </div>
             <div className="toolbar-row">
-              <span className="muted">
-                Showing {Math.min(pageStart + 1, totalLicenses)}-
-                {Math.min(pageStart + pagedLicenses.length, totalLicenses)} of {totalLicenses} single licenses
-              </span>
-              <div className="pagination">
-                <button
-                  className="ghost"
-                  onClick={() => setLicensePage((prev) => Math.max(1, prev - 1))}
-                  disabled={currentPage === 1}
-                >
-                  Prev
-                </button>
-                <span className="muted">
-                  Page {currentPage} / {totalPages}
-                </span>
-                <button
-                  className="ghost"
-                  onClick={() => setLicensePage((prev) => Math.min(totalPages, prev + 1))}
-                  disabled={currentPage === totalPages}
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          </div>
-          <div className="bulk-license-groups">
-            <div className="bulk-license-header">
-              <h3>Bulk batches</h3>
-              <span className="muted">{bulkLicenses.length} licenses</span>
-            </div>
-            {bulkGroups.length === 0 ? (
-              <div className="empty">No bulk licenses yet.</div>
-            ) : (
-              bulkGroups.map((group) => {
-                const expanded = Boolean(expandedBulkGroups[group.label])
-                return (
-                  <div key={group.label} className="bulk-group">
-                    <button className="ghost bulk-group-toggle" onClick={() => toggleBulkGroup(group.label)}>
-                      <span className="bulk-group-title">{group.label}</span>
-                      <span className="muted">{group.items.length} licenses</span>
-                      <span className="bulk-group-chevron">{expanded ? '-' : '+'}</span>
+              {licenseListView === 'single' ? (
+                <>
+                  <span className="muted">
+                    Showing {Math.min(pageStart + 1, totalLicenses)}-
+                    {Math.min(pageStart + pagedLicenses.length, totalLicenses)} of {totalLicenses} single licenses
+                  </span>
+                  <div className="pagination">
+                    <button
+                      className="ghost"
+                      onClick={() => setLicensePage((prev) => Math.max(1, prev - 1))}
+                      disabled={currentPage === 1}
+                    >
+                      Prev
                     </button>
-                    {expanded && (
-                      <div className="bulk-group-body">
-                        <div className="table-row table-header bulk-row">
-                          <span>ID</span>
-                          <span>Plan</span>
-                          <span>Usage</span>
-                          <span>Status</span>
-                          <span>Created</span>
-                          <span>Expires</span>
-                          <span>Actions</span>
-                        </div>
-                        {group.items.map((license) => (
-                          <div key={license.license_id} className="table-row bulk-row">
-                            <span data-label="ID">{license.license_id.slice(0, 8)}...</span>
-                            <span data-label="Plan">{license.plan}</span>
-                            <span data-label="Usage">
-                              {(activationCounts[license.license_id] ?? 0)}/
-                              {license.max_activations === 0 ? 'Unlimited' : license.max_activations}
-                            </span>
-                            <span data-label="Status" className={isExpired(license) ? 'status-expired' : undefined}>
-                              {license.revoked ? 'Revoked' : isExpired(license) ? 'Expired' : 'Active'}
-                            </span>
-                            <span data-label="Created">{new Date(license.created_at).toLocaleDateString()}</span>
-                            <span data-label="Expires">
-                              {license.expires_at ? new Date(license.expires_at).toLocaleDateString() : 'Unlimited'}
-                            </span>
-                            <div className="row-actions" data-label="Actions">
-                              <button
-                                className="ghost"
-                                onClick={() => openLicenseModules(license.license_id)}
-                              >
-                                <i className="fa-solid fa-pen-to-square mobile-only" aria-hidden="true" />
-                                <span className="desktop-only">Edit</span>
-                              </button>
-                              <button
-                                className="ghost"
-                                onClick={() => navigate(`/projects/${projectId}/activations?license=${license.license_id}`)}
-                              >
-                                <i className="fa-solid fa-wave-square mobile-only" aria-hidden="true" />
-                                <span className="desktop-only">Activations</span>
-                              </button>
-                              <button
-                                className="ghost danger"
-                                onClick={() => handleRevokeLicense(license.license_id)}
-                                disabled={isExpired(license)}
-                              >
-                                <i className="fa-solid fa-ban mobile-only" aria-hidden="true" />
-                                <span className="desktop-only">Revoke</span>
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    <span className="muted">
+                      Page {currentPage} / {totalPages}
+                    </span>
+                    <button
+                      className="ghost"
+                      onClick={() => setLicensePage((prev) => Math.min(totalPages, prev + 1))}
+                      disabled={currentPage === totalPages}
+                    >
+                      Next
+                    </button>
                   </div>
-                )
-              })
-            )}
+                </>
+              ) : (
+                <span className="muted">
+                  Showing {bulkLicenses.length} bulk licenses grouped by batch note
+                </span>
+              )}
+            </div>
           </div>
-          <div className="table">
+          {licenseListView === 'bulk' && (
+            <div className="bulk-license-groups">
+              <div className="bulk-license-header">
+                <h3>Bulk batches</h3>
+                <span className="muted">{bulkLicenses.length} licenses</span>
+              </div>
+              {bulkGroups.length === 0 ? (
+                <div className="empty">No bulk licenses yet.</div>
+              ) : (
+                bulkGroups.map((group) => {
+                  const expanded = Boolean(expandedBulkGroups[group.label])
+                  return (
+                    <div key={group.label} className="bulk-group">
+                      <button className="ghost bulk-group-toggle" onClick={() => toggleBulkGroup(group.label)}>
+                        <span className="bulk-group-title">{group.label}</span>
+                        <span className="muted">{group.items.length} licenses</span>
+                        <span className="bulk-group-chevron">{expanded ? '-' : '+'}</span>
+                      </button>
+                      {expanded && (
+                        <div className="bulk-group-body">
+                          <div className="table-row table-header bulk-row">
+                            <span>ID</span>
+                            <span>Plan</span>
+                            <span>Usage</span>
+                            <span>Status</span>
+                            <span>Created</span>
+                            <span>Expires</span>
+                            <span>Actions</span>
+                          </div>
+                          {group.items.map((license) => (
+                            <div key={license.license_id} className="table-row bulk-row">
+                              <span data-label="ID" className="identifier" title={license.license_id}>
+                                {formatIdentifier(license.license_id)}
+                              </span>
+                              <span data-label="Plan">{license.plan}</span>
+                              <span data-label="Usage">
+                                {(activationCounts[license.license_id] ?? 0)}/
+                                {license.max_activations === 0 ? 'Unlimited' : license.max_activations}
+                              </span>
+                              <span data-label="Status" className={isExpired(license) ? 'status-expired' : undefined}>
+                                {license.revoked ? 'Revoked' : isExpired(license) ? 'Expired' : 'Active'}
+                              </span>
+                              <span data-label="Created">{new Date(license.created_at).toLocaleDateString()}</span>
+                              <span data-label="Expires">
+                                {license.expires_at ? new Date(license.expires_at).toLocaleDateString() : 'Unlimited'}
+                              </span>
+                              <div className="row-actions" data-label="Actions">
+                                <button
+                                  className="ghost"
+                                  onClick={() => openLicenseModules(license.license_id)}
+                                >
+                                  <i className="fa-solid fa-pen-to-square mobile-only" aria-hidden="true" />
+                                  <span className="desktop-only">Edit</span>
+                                </button>
+                                <button
+                                  className="ghost"
+                                  onClick={() => navigate(`/projects/${projectId}/activations?license=${license.license_id}`)}
+                                >
+                                  <i className="fa-solid fa-wave-square mobile-only" aria-hidden="true" />
+                                  <span className="desktop-only">Activations</span>
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )
+                })
+              )}
+            </div>
+          )}
+          {licenseListView === 'single' && <div className="table">
             <div className="table-row table-header license-row">
               <span>ID</span>
               <span>Plan</span>
@@ -2392,13 +2425,17 @@ function LicensesSection() {
             </div>
             {pagedLicenses.map((license) => (
               <div key={license.license_id} className="table-row license-row">
-                <span>{license.license_id.slice(0, 8)}...</span>
+                <span data-label="ID" className="identifier" title={license.license_id}>
+                  {formatIdentifier(license.license_id)}
+                </span>
                 <span>{license.plan}</span>
                 <span data-label="Usage">
                               {(activationCounts[license.license_id] ?? 0)}/
                   {license.max_activations === 0 ? 'Unlimited' : license.max_activations}
                 </span>
-                <span data-label="Notes">{license.notes || '-'}</span>
+                <span data-label="Notes" title={license.notes || '-'}>
+                  {license.notes || '-'}
+                </span>
                 <span className={isExpired(license) ? 'status-expired' : undefined}>
                   {license.revoked ? 'Revoked' : isExpired(license) ? 'Expired' : 'Active'}
                 </span>
@@ -2421,25 +2458,285 @@ function LicensesSection() {
                     <i className="fa-solid fa-wave-square mobile-only" aria-hidden="true" />
                     <span className="desktop-only">Activations</span>
                   </button>
-                  <button
-                    className="ghost danger"
-                    onClick={() => handleRevokeLicense(license.license_id)}
-                    disabled={isExpired(license)}
-                  >
-                    <i className="fa-solid fa-ban mobile-only" aria-hidden="true" />
-                    <span className="desktop-only">Revoke</span>
-                  </button>
                 </div>
               </div>
             ))}
             {pagedLicenses.length === 0 && <div className="empty">No single licenses yet.</div>}
-          </div>
+          </div>}
         </div>
       </section>
+      {wizardOpen && (
+        <div className="modal-backdrop" role="presentation" onClick={() => setWizardOpen(false)}>
+          <div
+            className="modal modal-wide"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="license-guided-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <h2 id="license-guided-title">License wizard</h2>
+              <button className="icon-button" onClick={() => setWizardOpen(false)} aria-label="Close">
+                <i className="fa-solid fa-xmark" />
+              </button>
+            </div>
+            <div className="wizard-mode-toggle">
+              <span className={wizardMode === 'single' ? 'active' : ''}>Single</span>
+              <label className="module-switch wizard-mode-switch" aria-label="Toggle single or bulk mode">
+                <input
+                  type="checkbox"
+                  checked={wizardMode === 'bulk'}
+                  onChange={(event) => setWizardMode(event.target.checked ? 'bulk' : 'single')}
+                />
+                <span className="switch-track" />
+              </label>
+              <span className={wizardMode === 'bulk' ? 'active' : ''}>Bulk</span>
+            </div>
+            <div className="wizard-steps">
+              <span className={wizardStep >= 1 ? 'active' : ''}>1. Config</span>
+              <span className={wizardStep >= 2 ? 'active' : ''}>2. Review</span>
+            </div>
+            {wizardStep === 1 && (
+              <>
+                <div className={`form wizard-config ${wizardMode === 'bulk' ? 'bulk-license-form' : 'license-form'}`}>
+                  {wizardMode === 'bulk' && (
+                    <>
+                      <label className="field full">
+                        <span>Recipients</span>
+                        <textarea
+                          rows={4}
+                          value={bulkRecipients}
+                          onChange={(event) => setBulkRecipients(event.target.value)}
+                          placeholder="one recipient per line (email required only if send mail is enabled)"
+                        />
+                        <span className="muted">{bulkRecipientList.length} recipients detected</span>
+                      </label>
+                      <div className="field full delivery-field">
+                        <span>Delivery</span>
+                        <label className="module-switch wizard-delivery-toggle">
+                          <input
+                            type="checkbox"
+                            checked={bulkSendEmail}
+                            onChange={(event) => setBulkSendEmail(event.target.checked)}
+                          />
+                          <span className="switch-track" />
+                          <span className="switch-label">Send emails automatically</span>
+                        </label>
+                        <span className="muted">
+                          {bulkSendEmail
+                            ? 'Requires valid recipient emails and verified SMTP.'
+                            : 'Recipients can be names or aliases. No email is sent.'}
+                        </span>
+                      </div>
+                    </>
+                  )}
+                  <label className="field">
+                    <span>Plan</span>
+                    <select
+                      value={wizardMode === 'bulk' ? bulkPlan : licensePlan}
+                      onChange={(event) =>
+                        wizardMode === 'bulk'
+                          ? handleBulkPlanChange(event.target.value)
+                          : handlePlanChange(event.target.value)
+                      }
+                    >
+                      {plans.length === 0 && <option value="basic">basic</option>}
+                      {plans.map((plan) => (
+                        <option key={plan.id} value={plan.name}>
+                          {plan.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>Max activations</span>
+                    <input
+                      type="number"
+                      min={0}
+                      value={wizardMode === 'bulk' ? bulkMaxActivations : licenseMaxActivations}
+                      onChange={(event) =>
+                        wizardMode === 'bulk'
+                          ? setBulkMaxActivations(Number(event.target.value))
+                          : setLicenseMaxActivations(Number(event.target.value))
+                      }
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Duration (days)</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={wizardMode === 'bulk' ? bulkDurationDays : licenseDurationDays}
+                      onChange={(event) =>
+                        wizardMode === 'bulk'
+                          ? setBulkDurationDays(event.target.value)
+                          : setLicenseDurationDays(event.target.value)
+                      }
+                      placeholder="Leave empty for unlimited"
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Notes</span>
+                    <input
+                      type="text"
+                      value={wizardMode === 'bulk' ? bulkNotes : licenseNotes}
+                      onChange={(event) =>
+                        wizardMode === 'bulk'
+                          ? setBulkNotes(event.target.value)
+                          : setLicenseNotes(event.target.value)
+                      }
+                      placeholder="Optional note"
+                    />
+                  </label>
+                  {wizardMode === 'bulk' && bulkSendEmail && !smtpVerified && smtpLoaded && (
+                    <div className="notice warn">SMTP is required only when "Send emails automatically" is enabled.</div>
+                  )}
+                </div>
+                <div className="wizard-modules">
+                  <div className="wizard-modules-actions">
+                    <span className="muted">
+                      {wizardMode === 'bulk' ? bulkModuleKeys.length : createModuleKeys.length} selected on {projectModules.length}
+                    </span>
+                    <div className="row-actions">
+                      <button
+                        className="ghost"
+                        onClick={() =>
+                          wizardMode === 'bulk'
+                            ? setBulkModuleKeys(projectModules.map((module) => module.key))
+                            : setCreateModuleKeys(projectModules.map((module) => module.key))
+                        }
+                        disabled={projectModules.length === 0}
+                      >
+                        Select all
+                      </button>
+                      <button
+                        className="ghost"
+                        onClick={() => (wizardMode === 'bulk' ? setBulkModuleKeys([]) : setCreateModuleKeys([]))}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+                  {projectModulesError && <div className="error">{projectModulesError}</div>}
+                  <div className="module-switch-grid">
+                    {projectModules.map((module) => (
+                      <label key={module.id} className="module-switch wizard-module-row">
+                        <input
+                          type="checkbox"
+                          checked={
+                            wizardMode === 'bulk'
+                              ? bulkModuleKeys.includes(module.key)
+                              : createModuleKeys.includes(module.key)
+                          }
+                          onChange={() =>
+                            wizardMode === 'bulk'
+                              ? toggleBulkModule(module.key)
+                              : toggleCreateModule(module.key)
+                          }
+                        />
+                        <span className="switch-track" />
+                        <span className="switch-label">
+                          {module.name} <span className="muted">({module.key})</span>
+                        </span>
+                      </label>
+                    ))}
+                    {projectModules.length === 0 && <div className="empty">No project modules found.</div>}
+                  </div>
+                </div>
+              </>
+            )}
+            {wizardStep === 2 && (
+              <div className="wizard-summary">
+                {wizardMode === 'bulk' && (
+                  <div className="project-detail-row">
+                    <span className="muted">Recipients</span>
+                    <strong>{bulkRecipientList.length}</strong>
+                  </div>
+                )}
+                <div className="project-detail-row">
+                  <span className="muted">Plan</span>
+                  <strong>{wizardMode === 'bulk' ? bulkPlan : licensePlan}</strong>
+                </div>
+                <div className="project-detail-row">
+                  <span className="muted">Max activations</span>
+                  <strong>
+                    {(wizardMode === 'bulk' ? bulkMaxActivations : licenseMaxActivations) === 0
+                      ? 'Unlimited'
+                      : wizardMode === 'bulk'
+                      ? bulkMaxActivations
+                      : licenseMaxActivations}
+                  </strong>
+                </div>
+                <div className="project-detail-row">
+                  <span className="muted">Duration</span>
+                  <strong>{wizardMode === 'bulk' ? bulkDurationDays || 'Unlimited' : licenseDurationDays || 'Unlimited'}</strong>
+                </div>
+                <div className="project-detail-row">
+                  <span className="muted">Modules</span>
+                  <strong>
+                    {(wizardMode === 'bulk' ? bulkModuleKeys.length : createModuleKeys.length) === 0
+                      ? 'All by default'
+                      : wizardMode === 'bulk'
+                      ? bulkModuleKeys.length
+                      : createModuleKeys.length}
+                  </strong>
+                </div>
+                {wizardMode === 'bulk' && (
+                  <div className="project-detail-row">
+                    <span className="muted">Send emails</span>
+                    <strong>{bulkSendEmail ? 'Yes' : 'No'}</strong>
+                  </div>
+                )}
+              </div>
+            )}
+            {createError && <div className="error">{createError}</div>}
+            {bulkError && <div className="error">{bulkError}</div>}
+            {bulkMessage && wizardMode === 'bulk' && <div className="notice">{bulkMessage}</div>}
+            {wizardMode === 'bulk' && bulkResult?.created.length ? (
+              <button className="ghost" onClick={downloadBulkCsv}>
+                Download CSV keys
+              </button>
+            ) : null}
+            <div className="modal-actions">
+              <button className="ghost" onClick={() => setWizardOpen(false)}>Cancel</button>
+              {wizardStep > 1 && (
+                <button className="ghost" onClick={() => setWizardStep((prev) => prev - 1)}>
+                  Back
+                </button>
+              )}
+              {wizardStep < 2 ? (
+                <button
+                  className="primary"
+                  onClick={() => setWizardStep((prev) => prev + 1)}
+                  disabled={
+                    wizardMode === 'bulk'
+                      ? bulkRecipientList.length === 0 || (bulkSendEmail && !smtpVerified)
+                      : false
+                  }
+                >
+                  Next
+                </button>
+              ) : wizardMode === 'bulk' ? (
+                <button
+                  className="primary"
+                  onClick={handleBulkCreate}
+                  disabled={bulkRecipientList.length === 0 || (bulkSendEmail && !smtpVerified)}
+                >
+                  {bulkSendEmail ? 'Create & send licenses' : 'Create bulk licenses'}
+                </button>
+              ) : (
+                <button className="primary" onClick={handleCreateLicense}>
+                  Create license key
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       {licenseModuleModalOpen && licenseModuleLicenseId && (
         <div className="modal-backdrop" role="presentation" onClick={() => setLicenseModuleModalOpen(false)}>
           <div
-            className="modal"
+            className="modal modal-wide license-modules-modal"
             role="dialog"
             aria-modal="true"
             aria-labelledby="license-modules-title"
@@ -2451,8 +2748,28 @@ function LicensesSection() {
                 <i className="fa-solid fa-xmark" />
               </button>
             </div>
-            <p className="muted">License ID: {licenseModuleLicenseId}</p>
-            <div className="module-switches">
+            <div className="license-modules-meta">
+              <div className="meta-item">
+                <span className="muted">License ID</span>
+                <strong className="identifier">{formatIdentifier(licenseModuleLicenseId, 12, 8)}</strong>
+              </div>
+              <div className="meta-item">
+                <span className="muted">Enabled modules</span>
+                <strong>{licenseModules.filter((module) => module.enabled).length}/{licenseModules.length}</strong>
+              </div>
+              <div className="meta-item">
+                <span className="muted">Status</span>
+                <strong>{moduleLicenseRevoked ? 'Revoked/Expired' : 'Active'}</strong>
+              </div>
+            </div>
+            <div className="license-modules-toolbar">
+              <span className="muted">Force overrides are preserved.</span>
+              <div className="row-actions">
+                <button className="ghost" onClick={() => setLicenseModulesEnabled(true)}>Enable all</button>
+                <button className="ghost" onClick={() => setLicenseModulesEnabled(false)}>Disable all</button>
+              </div>
+            </div>
+            <div className="module-switches license-modules-editor">
               <div className="module-switch-grid">
                 {licenseModules.map((module) => (
                   <div key={module.module_id} className="module-switch-row">
@@ -2522,6 +2839,7 @@ function ActivationsSection() {
   const [activationSort, setActivationSort] = useState<'created_desc' | 'created_asc'>('created_desc')
   const [activationPage, setActivationPage] = useState(1)
   const [activationPageSize, setActivationPageSize] = useState(10)
+  const [showActivationFilters, setShowActivationFilters] = useState(false)
   const [activationModules, setActivationModules] = useState<ActivationModuleItem[]>([])
   const [moduleModalOpen, setModuleModalOpen] = useState(false)
   const [moduleActivationId, setModuleActivationId] = useState<string | null>(null)
@@ -2576,6 +2894,15 @@ function ActivationsSection() {
           ? { ...module, enabled: !module.enabled }
           : module,
       ),
+    )
+  }
+
+  const setActivationModulesEnabled = (nextEnabled: boolean) => {
+    setActivationModules((prev) =>
+      prev.map((module) => {
+        if (module.force_activation || module.force_deactivation) return module
+        return { ...module, enabled: nextEnabled }
+      }),
     )
   }
 
@@ -2748,7 +3075,7 @@ function ActivationsSection() {
               <option value="">Select license</option>
               {licenses.map((license) => (
                 <option key={license.license_id} value={license.license_id}>
-                  {license.license_id.slice(0, 8)}... ({license.plan}
+                  {formatIdentifier(license.license_id, 10, 4)} ({license.plan}
                   {license.notes ? ` - ${license.notes}` : ''})
                 </option>
               ))}
@@ -2761,8 +3088,14 @@ function ActivationsSection() {
               <h2>Activation list</h2>
               <span className="muted">Device hashes tied to this license.</span>
             </div>
+            <button
+              className="ghost collapse-toggle"
+              onClick={() => setShowActivationFilters((prev) => !prev)}
+            >
+              {showActivationFilters ? 'Hide filters' : 'Show filters'}
+            </button>
           </div>
-          <div className="toolbar">
+          <div className={`toolbar compact-toolbar collapse-body ${showActivationFilters ? '' : 'is-collapsed'}`}>
             <div className="toolbar-row">
               <label className="field">
                 <span>Search</span>
@@ -2854,9 +3187,15 @@ function ActivationsSection() {
             </div>
             {pagedActivations.map((activation) => (
               <div key={activation.activation_id} className="table-row activation-row">
-                <span data-label="ID">{activation.activation_id.slice(0, 8)}...</span>
-                <span data-label="Device">{activation.device_id_hash.slice(0, 10)}...</span>
-                <span data-label="Host">{activation.hostname_masked ?? 'Hidden'}</span>
+                <span data-label="ID" className="identifier" title={activation.activation_id}>
+                  {formatIdentifier(activation.activation_id)}
+                </span>
+                <span data-label="Device" className="identifier" title={activation.device_id_hash}>
+                  {formatIdentifier(activation.device_id_hash, 12, 8)}
+                </span>
+                <span data-label="Host" title={activation.hostname_masked ?? 'Hidden'}>
+                  {activation.hostname_masked ?? 'Hidden'}
+                </span>
                 <span data-label="Status">{activation.revoked ? 'Revoked' : 'Active'}</span>
                 <span data-label="Last seen">{formatLastSeen(activation.last_seen_at)}</span>
                 <div className="row-actions" data-label="Actions">
@@ -2885,7 +3224,7 @@ function ActivationsSection() {
       {moduleModalOpen && moduleActivationId && (
         <div className="modal-backdrop" role="presentation" onClick={() => setModuleModalOpen(false)}>
           <div
-            className="modal"
+            className="modal modal-wide activation-modules-modal"
             role="dialog"
             aria-modal="true"
             aria-labelledby="activation-modules-title"
@@ -2897,8 +3236,28 @@ function ActivationsSection() {
                 <i className="fa-solid fa-xmark" />
               </button>
             </div>
-            <p className="muted">Activation ID: {moduleActivationId}</p>
-            <div className="module-switches">
+            <div className="license-modules-meta activation-modules-meta">
+              <div className="meta-item">
+                <span className="muted">Activation ID</span>
+                <strong className="identifier">{formatIdentifier(moduleActivationId, 12, 8)}</strong>
+              </div>
+              <div className="meta-item">
+                <span className="muted">License ID</span>
+                <strong className="identifier">{formatIdentifier(selectedLicenseId, 12, 8)}</strong>
+              </div>
+              <div className="meta-item">
+                <span className="muted">Enabled modules</span>
+                <strong>{activationModules.filter((module) => module.enabled).length}/{activationModules.length}</strong>
+              </div>
+            </div>
+            <div className="license-modules-toolbar">
+              <span className="muted">Forced modules cannot be changed.</span>
+              <div className="row-actions">
+                <button className="ghost" onClick={() => setActivationModulesEnabled(true)}>Enable all</button>
+                <button className="ghost" onClick={() => setActivationModulesEnabled(false)}>Disable all</button>
+              </div>
+            </div>
+            <div className="module-switches license-modules-editor activation-modules-editor">
               <div className="module-switch-grid">
                 {activationModules.map((module) => (
                   <div key={module.module_id} className="module-switch-row">
@@ -2921,7 +3280,7 @@ function ActivationsSection() {
                 {activationModules.length === 0 && <div className="empty">No modules found.</div>}
               </div>
             </div>
-            <div className="module-switches">
+            <div className="module-switches activation-hostname-panel">
               <span className="field-label">Reveal hostname</span>
               <div className="form two-column">
                 <label className="field">
@@ -2973,6 +3332,8 @@ function ReleasesSection() {
   const [releaseSort, setReleaseSort] = useState<'published_desc' | 'published_asc'>('published_desc')
   const [releasePage, setReleasePage] = useState(1)
   const [releasePageSize, setReleasePageSize] = useState(12)
+  const [releaseModalOpen, setReleaseModalOpen] = useState(false)
+  const [showReleaseFilters, setShowReleaseFilters] = useState(false)
   const navigate = useNavigate()
 
   const loadReleases = async (id: string) => {
@@ -3002,10 +3363,10 @@ function ReleasesSection() {
     await loadReleases(projectId)
   }
 
-  const handleDownload = async (url: string) => {
+  const handleDownload = async (url: string, filename?: string) => {
     setReleaseError(null)
     try {
-      await downloadWithAuth(url)
+      await downloadWithAuth(url, filename)
     } catch {
       setReleaseError('Download failed. Sign in required.')
     }
@@ -3057,6 +3418,7 @@ function ReleasesSection() {
       setReleaseVersion('')
       setReleaseNotes('')
       setReleaseFile(null)
+      setReleaseModalOpen(false)
 
       await loadReleases(projectId)
     } catch (error) {
@@ -3108,6 +3470,17 @@ function ReleasesSection() {
   const currentReleasePage = Math.min(releasePage, totalReleasePages)
   const releaseStart = (currentReleasePage - 1) * releasePageSize
   const pagedReleases = filteredReleases.slice(releaseStart, releaseStart + releasePageSize)
+  const releaseStatusCounts = useMemo(() => {
+    return releases.reduce(
+      (acc, release) => {
+        if (release.status === 'draft' || release.status === 'published' || release.status === 'deprecated') {
+          acc[release.status] += 1
+        }
+        return acc
+      },
+      { draft: 0, published: 0, deprecated: 0 } as Record<'draft' | 'published' | 'deprecated', number>,
+    )
+  }, [releases])
 
   useEffect(() => {
     if (releasePage > totalReleasePages) {
@@ -3153,76 +3526,31 @@ function ReleasesSection() {
         <div className="card span-2">
           <div className="card-header">
             <div>
-              <h2>New release</h2>
-              <span className="muted">Upload a build or publish metadata only.</span>
-            </div>
-          </div>
-          <div className="release-form">
-            <label className="field">
-              <span>Version</span>
-              <input
-                type="text"
-                value={releaseVersion}
-                onChange={(event) => setReleaseVersion(event.target.value)}
-                placeholder="1.0.0"
-              />
-            </label>
-            <label className="field">
-              <span>Status</span>
-              <select
-                value={releaseStatus}
-                onChange={(event) => setReleaseStatus(event.target.value as typeof releaseStatus)}
-              >
-                <option value="published">Published</option>
-                <option value="draft">Draft</option>
-                <option value="deprecated">Deprecated</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>Channel</span>
-              <select
-                value={releaseChannel}
-                onChange={(event) => setReleaseChannel(event.target.value)}
-                disabled={releaseStatus === 'draft'}
-              >
-                <option value="stable">Stable</option>
-                <option value="beta">Beta</option>
-                <option value="hotfix">Hotfix</option>
-              </select>
-            </label>
-            <label className="field wide">
-              <span>Notes</span>
-              <input
-                type="text"
-                value={releaseNotes}
-                onChange={(event) => setReleaseNotes(event.target.value)}
-                placeholder="Release notes"
-              />
-            </label>
-            <label className="field wide">
-              <span>Asset file</span>
-              <input
-                type="file"
-                onChange={(event) => setReleaseFile(event.target.files?.[0] ?? null)}
-              />
-              <span className="muted">Leave empty to create a metadata-only release.</span>
-            </label>
-            <button className="primary" onClick={handleCreateRelease}>
-              Create release
-            </button>
-          </div>
-        </div>
-        <div className="card span-2">
-          <div className="card-header">
-            <div>
               <h2>Release history</h2>
               <span className="muted">Most recent releases across channels.</span>
             </div>
-            <button className="ghost" onClick={() => loadReleases(projectId)}>
-              Reload
-            </button>
+            <div className="card-actions">
+              <button className="primary" onClick={() => setReleaseModalOpen(true)}>
+                New release
+              </button>
+              <button
+                className="ghost collapse-toggle"
+                onClick={() => setShowReleaseFilters((prev) => !prev)}
+              >
+                {showReleaseFilters ? 'Hide filters' : 'Show filters'}
+              </button>
+              <button className="ghost" onClick={() => loadReleases(projectId)}>
+                Reload
+              </button>
+            </div>
           </div>
-          <div className="toolbar">
+          <div className="release-stats">
+            <span className="release-chip">Total {releases.length}</span>
+            <span className="release-chip published">Published {releaseStatusCounts.published}</span>
+            <span className="release-chip draft">Draft {releaseStatusCounts.draft}</span>
+            <span className="release-chip deprecated">Deprecated {releaseStatusCounts.deprecated}</span>
+          </div>
+          <div className={`toolbar compact-toolbar collapse-body ${showReleaseFilters ? '' : 'is-collapsed'}`}>
             <div className="toolbar-row">
               <label className="field">
                 <span>Search</span>
@@ -3334,7 +3662,7 @@ function ReleasesSection() {
                 )}
                 <div className="release-actions">
                   {release.asset?.download_url && (
-                    <button className="ghost" onClick={() => handleDownload(release.asset!.download_url)}>
+                    <button className="ghost" onClick={() => handleDownload(release.asset!.download_url, release.asset?.filename)}>
                       Download
                     </button>
                   )}
@@ -3364,6 +3692,83 @@ function ReleasesSection() {
           {releaseError && <div className="error">{releaseError}</div>}
         </div>
       </section>
+      {releaseModalOpen && (
+        <div className="modal-backdrop" role="presentation" onClick={() => setReleaseModalOpen(false)}>
+          <div
+            className="modal modal-wide"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="new-release-title"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="modal-header">
+              <h2 id="new-release-title">New release</h2>
+              <button className="icon-button" onClick={() => setReleaseModalOpen(false)} aria-label="Close">
+                <i className="fa-solid fa-xmark" />
+              </button>
+            </div>
+            <p className="muted">Upload a build or create a metadata-only release.</p>
+            <div className="release-form">
+              <label className="field">
+                <span>Version</span>
+                <input
+                  type="text"
+                  value={releaseVersion}
+                  onChange={(event) => setReleaseVersion(event.target.value)}
+                  placeholder="1.0.0"
+                />
+              </label>
+              <label className="field">
+                <span>Status</span>
+                <select
+                  value={releaseStatus}
+                  onChange={(event) => setReleaseStatus(event.target.value as typeof releaseStatus)}
+                >
+                  <option value="published">Published</option>
+                  <option value="draft">Draft</option>
+                  <option value="deprecated">Deprecated</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Channel</span>
+                <select
+                  value={releaseChannel}
+                  onChange={(event) => setReleaseChannel(event.target.value)}
+                  disabled={releaseStatus === 'draft'}
+                >
+                  <option value="stable">Stable</option>
+                  <option value="beta">Beta</option>
+                  <option value="hotfix">Hotfix</option>
+                </select>
+              </label>
+              <label className="field wide">
+                <span>Notes</span>
+                <input
+                  type="text"
+                  value={releaseNotes}
+                  onChange={(event) => setReleaseNotes(event.target.value)}
+                  placeholder="Release notes"
+                />
+              </label>
+              <label className="field wide">
+                <span>Asset file</span>
+                <input
+                  type="file"
+                  onChange={(event) => setReleaseFile(event.target.files?.[0] ?? null)}
+                />
+                <span className="muted">Leave empty to create a metadata-only release.</span>
+              </label>
+            </div>
+            {releaseError && <div className="error">{releaseError}</div>}
+            <div className="modal-actions">
+              <button className="ghost" onClick={() => setReleaseModalOpen(false)}>Cancel</button>
+              <button className="primary" onClick={handleCreateRelease}>
+                Create release
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -3428,7 +3833,7 @@ function ReleaseDetailSection() {
     if (!release?.asset?.download_url) return
     setDownloadError(null)
     try {
-      await downloadWithAuth(release.asset.download_url)
+      await downloadWithAuth(release.asset.download_url, release.asset.filename)
     } catch {
       setDownloadError('Download failed. Sign in required.')
     }

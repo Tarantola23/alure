@@ -251,7 +251,10 @@ export class LicensingService {
     }
 
     await this.backfillBulkRecipientHashes();
-    await this.smtpService.assertVerified();
+    const shouldSendEmail = body.send_email !== false;
+    if (shouldSendEmail) {
+      await this.smtpService.assertVerified();
+    }
 
     const durationDays = body.duration_days ?? plan.durationDaysDefault ?? null;
     const expiresAt = durationDays ? new Date(Date.now() + durationDays * 24 * 60 * 60 * 1000) : null;
@@ -309,15 +312,17 @@ export class LicensingService {
           });
         }
         licenseId = license.id;
-        await this.smtpService.sendLicenseEmail({
-          toEmail: email,
-          projectName: project.name,
-          plan: body.plan,
-          maxActivations: body.max_activations,
-          durationDays: durationDays ?? undefined,
-          expiresAt: expiresAt ?? undefined,
-          licenseKey,
-        });
+        if (shouldSendEmail) {
+          await this.smtpService.sendLicenseEmail({
+            toEmail: email,
+            projectName: project.name,
+            plan: body.plan,
+            maxActivations: body.max_activations,
+            durationDays: durationDays ?? undefined,
+            expiresAt: expiresAt ?? undefined,
+            licenseKey,
+          });
+        }
         created.push({ email, license_id: license.id, license_key: licenseKey });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'unknown_error';
@@ -443,6 +448,9 @@ export class LicensingService {
   async verify(body: VerifyRequestDto): Promise<VerifyResponseDto> {
     const now = new Date();
     const receiptHash = this.hash(body.receipt);
+    const hostnameValue =
+      typeof body.device_meta?.hostname === 'string' ? body.device_meta.hostname.trim() : null;
+    const hostnameEnc = hostnameValue ? encryptData(hostnameValue, this.getDataKey()) : null;
 
     return this.prisma.$transaction(async (tx) => {
       const parsed = verifyReceipt(body.receipt);
@@ -524,7 +532,11 @@ export class LicensingService {
         });
         await tx.activation.update({
           where: { id: activation.id },
-          data: { lastSeenAt: now, receiptHash: this.hash(refreshedReceipt) },
+          data: {
+            lastSeenAt: now,
+            receiptHash: this.hash(refreshedReceipt),
+            ...(hostnameEnc ? { hostnameEnc } : {}),
+          },
         });
         return {
           valid: true,
@@ -551,7 +563,11 @@ export class LicensingService {
       });
       await tx.activation.update({
         where: { id: activation.id },
-        data: { lastSeenAt: now, receiptHash: this.hash(refreshedReceipt) },
+        data: {
+          lastSeenAt: now,
+          receiptHash: this.hash(refreshedReceipt),
+          ...(hostnameEnc ? { hostnameEnc } : {}),
+        },
       });
       return {
         valid: true,
@@ -770,7 +786,7 @@ export class LicensingService {
       max_activations: refreshed.license.maxActivations,
       issued_at: new Date().toISOString(),
       expires_at: refreshed.license.expiresAt ? refreshed.license.expiresAt.toISOString() : null,
-      grace_period_days: refreshed.license.gracePeriodDays ?? 14,
+      grace_period_days: 14,
       modules,
     });
     await this.prisma.activation.update({

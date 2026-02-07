@@ -114,13 +114,15 @@ class AlureClient:
         )
 
     def verify_online(self, receipt: str | None = None, device_id: str | None = None) -> dict[str, Any]:
+        stored = self.storage.load_receipt()
         if receipt is None or device_id is None:
-            stored = self.storage.load_receipt()
             if not stored:
                 raise HttpError(400, "missing_receipt")
             receipt = receipt or stored.receipt
             device_id = device_id or stored.device_id
-        data = self._request("POST", "/licenses/verify", {"receipt": receipt, "device_id": device_id})
+        payload: dict[str, Any] = {"receipt": receipt, "device_id": device_id}
+        payload["device_meta"] = {"hostname": platform.node()}
+        data = self._request("POST", "/licenses/verify", payload)
         new_receipt = data.get("new_receipt")
         if new_receipt:
             record = ReceiptRecord(
@@ -175,6 +177,88 @@ class AlureClient:
             return payload.get("modules") or []
         except Exception:
             return []
+
+    def enabled_modules(self, receipt: str | None = None) -> list[str]:
+        modules = self.modules_from_receipt(receipt)
+        keys = {item.get("key") for item in modules if item.get("key")}
+        return sorted(keys)
+
+    def ensure_active(
+        self,
+        license_key: str | None = None,
+        device_id: str | None = None,
+        allow_offline: bool = True,
+        verify_signature: bool = False,
+        app_version: str | None = None,
+        device_meta: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        stored = self.storage.load_receipt()
+        if stored:
+            try:
+                online = self.verify_online(stored.receipt, stored.device_id)
+                online["source"] = "online"
+                return online
+            except (HttpError, urllib.error.URLError):
+                if allow_offline:
+                    offline = self.verify_offline(stored.receipt, stored.device_id, verify_signature=verify_signature)
+                    return {"valid": offline.valid, "reason": offline.reason, "source": "offline"}
+                raise
+
+        if not license_key:
+            return {"valid": False, "reason": "missing_license_or_receipt", "source": "local"}
+
+        try:
+            self.activate(license_key, device_id, app_version=app_version, device_meta=device_meta)
+        except HttpError as exc:
+            if exc.status_code == 409 and "activation_already_exists" in str(exc):
+                stored = self.storage.load_receipt()
+                if stored:
+                    online = self.verify_online(stored.receipt, stored.device_id)
+                    online["source"] = "existing_activation"
+                    return online
+                return {"valid": False, "reason": "activation_already_exists", "source": "activate"}
+            raise
+        online = self.verify_online()
+        online["source"] = "activate"
+        return online
+
+    def quickstart(
+        self,
+        license_key: str | None = None,
+        device_id: str | None = None,
+        allow_offline: bool = True,
+        verify_signature: bool = False,
+        app_version: str | None = None,
+        device_meta: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        result = self.ensure_active(
+            license_key=license_key,
+            device_id=device_id,
+            allow_offline=allow_offline,
+            verify_signature=verify_signature,
+            app_version=app_version,
+            device_meta=device_meta,
+        )
+        result["modules"] = self.enabled_modules()
+        result["modules_full"] = self.modules_from_receipt()
+        return result
+
+    def check_update_and_download(
+        self,
+        project_id: str,
+        channel: str,
+        current_version: str | None = None,
+        receipt: str | None = None,
+        device_id: str | None = None,
+    ) -> dict[str, Any]:
+        update = self.check_update(project_id=project_id, channel=channel, current_version=current_version)
+        if not update.get("update_available"):
+            return {"update_available": False}
+        asset = update.get("asset")
+        if not asset or not asset.get("asset_id"):
+            return {"update_available": True, "asset": None}
+        path = self.download_asset(asset["asset_id"], receipt=receipt, device_id=device_id)
+        return {"update_available": True, "asset": asset, "download_path": path}
 
     def request_download_token(self, receipt: str, device_id: str, asset_id: str) -> dict[str, Any]:
         return self._request(

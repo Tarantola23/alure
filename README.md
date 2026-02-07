@@ -31,6 +31,9 @@ Alure is an open source, self-hosted platform for desktop software licensing and
 4) Check update -> `/updates/latest` returns latest release metadata.
 5) Download -> protected by JWT or download token (`/updates/download-token`).
 
+## SDK (EN)
+See the detailed Python SDK guide in `sdk-python/README.md`.
+
 ## Repository Layout (EN)
 - `server/` NestJS API + Prisma schema.
 - `dashboard/` React + Vite UI.
@@ -71,6 +74,62 @@ Optional:
 - `SMTP_ENCRYPTION_KEY` to encrypt SMTP passwords (fallbacks to `JWT_SECRET`).
 - `DASHBOARD_URL` for invite links (defaults to `http://localhost:5173`).
 - `DATA_ENCRYPTION_KEY` to encrypt device hostnames (fallbacks to `JWT_SECRET`).
+
+## API Error Codes (EN)
+The API returns a numeric `error_code` in the JSON body and `X-Error-Code` header.
+
+Auth (1xxx):
+- 1001 admin_only
+- 1002 admin_exists
+- 1003 user_exists
+- 1004 user_not_found
+- 1005 invalid_invite
+- 1006 invite_expired
+- 1007 invalid_otp
+- 1008 auth_required
+- 1009 invalid_password
+- 1010 missing_user
+
+Licensing (2xxx):
+- 2001 license_not_found
+- 2002 license_revoked
+- 2003 license_expired
+- 2004 activation_already_exists
+- 2005 activation_limit_reached
+- 2006 activation_not_found
+- 2007 recipients_required
+- 2008 module_not_found
+- 2009 module_not_allowed
+
+Releases & Updates (3xxx):
+- 3001 release_not_found
+- 3002 release_version_exists
+- 3003 channel_required
+- 3004 invalid_channel
+- 3005 invalid_release
+- 3006 file_required
+- 3007 asset_not_found
+- 3008 asset_project_mismatch
+- 3009 license_invalid
+- 3010 invalid_token
+- 3011 missing_token
+
+SMTP (4xxx):
+- 4001 smtp_not_verified
+- 4002 smtp_not_configured
+- 4003 missing_password
+- 4004 missing_verification_code
+- 4005 verification_code_expired
+- 4006 invalid_verification_code
+
+Projects & Modules (5xxx):
+- 5001 project_not_found
+- 5002 project_name_already_exists
+- 5003 module_key_exists
+
+Plans (6xxx):
+- 6001 plan_not_found
+- 6002 plan_name_already_exists
 
 ### Encrypted device hostname (EN)
 - The SDK sends `device_meta.hostname` during activation.
@@ -117,6 +176,9 @@ Alure e una piattaforma open source e self-hosted per licensing e distribuzione 
 4) Check update -> `/updates/latest` ritorna metadati release.
 5) Download -> protetto da JWT o token (`/updates/download-token`).
 
+## SDK (IT)
+Consulta la guida SDK Python in `sdk-python/README.md`.
+
 ## Struttura repo (IT)
 - `server/` API NestJS + Prisma.
 - `dashboard/` UI React + Vite.
@@ -152,6 +214,62 @@ Opzionali:
 - `SMTP_ENCRYPTION_KEY` per cifrare le password SMTP (fallback su `JWT_SECRET`).
 - `DASHBOARD_URL` per i link di invito (default `http://localhost:5173`).
 - `DATA_ENCRYPTION_KEY` per cifrare gli hostname dei device (fallback su `JWT_SECRET`).
+
+## Codici errore API (IT)
+L'API restituisce `error_code` nel JSON e `X-Error-Code` negli header.
+
+Auth (1xxx):
+- 1001 admin_only
+- 1002 admin_exists
+- 1003 user_exists
+- 1004 user_not_found
+- 1005 invalid_invite
+- 1006 invite_expired
+- 1007 invalid_otp
+- 1008 auth_required
+- 1009 invalid_password
+- 1010 missing_user
+
+Licensing (2xxx):
+- 2001 license_not_found
+- 2002 license_revoked
+- 2003 license_expired
+- 2004 activation_already_exists
+- 2005 activation_limit_reached
+- 2006 activation_not_found
+- 2007 recipients_required
+- 2008 module_not_found
+- 2009 module_not_allowed
+
+Releases & Updates (3xxx):
+- 3001 release_not_found
+- 3002 release_version_exists
+- 3003 channel_required
+- 3004 invalid_channel
+- 3005 invalid_release
+- 3006 file_required
+- 3007 asset_not_found
+- 3008 asset_project_mismatch
+- 3009 license_invalid
+- 3010 invalid_token
+- 3011 missing_token
+
+SMTP (4xxx):
+- 4001 smtp_not_verified
+- 4002 smtp_not_configured
+- 4003 missing_password
+- 4004 missing_verification_code
+- 4005 verification_code_expired
+- 4006 invalid_verification_code
+
+Projects & Modules (5xxx):
+- 5001 project_not_found
+- 5002 project_name_already_exists
+- 5003 module_key_exists
+
+Plans (6xxx):
+- 6001 plan_not_found
+- 6002 plan_name_already_exists
 
 ### Hostname device cifrato (IT)
 - L'SDK invia `device_meta.hostname` durante l'attivazione.

@@ -1,6 +1,8 @@
 ﻿openapi: 3.0.3
 info:
   title: Alure API
+  description: |
+    Errors include a numeric `error_code` in the JSON body and `X-Error-Code` header when available.
   version: 0.1.0
 servers:
   - url: /api/v1
@@ -922,6 +924,11 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+  headers:
+    ErrorCode:
+      description: Numeric error code that matches the response error_code.
+      schema:
+        type: integer
   schemas:
     ActivateRequest:
       type: object
@@ -961,6 +968,9 @@ components:
           type: string
         device_id:
           type: string
+        device_meta:
+          type: object
+          additionalProperties: true
     VerifyResponse:
       type: object
       required: [valid, server_time]
@@ -977,6 +987,21 @@ components:
         server_time:
           type: string
           format: date-time
+    ErrorResponse:
+      type: object
+      properties:
+        statusCode:
+          type: integer
+        message:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+        error:
+          type: string
+        error_code:
+          type: integer
     RevokeRequest:
       type: object
       properties:
