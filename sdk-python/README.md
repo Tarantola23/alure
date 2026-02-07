@@ -1,74 +1,93 @@
-# SDK Python
+# Alure Python SDK
 
-SDK ufficiale per licensing + update.
+Official Python SDK for Alure licensing and update flows.
 
-Funzionalita principali:
-- Attivazione licenza online
-- Validazione offline tramite receipt
-- Check update e download asset
-- Storage locale configurabile
-- UI opzionale (Tkinter)
+## Install
 
-## Installazione (dev)
-```
-pip install -e .
-```
+From PyPI:
 
-## Installazione (PyPI)
-```
+```bash
 pip install alure-sdk
 ```
 
+From local source (development):
 
-
-Build e upload:
+```bash
+pip install -e .
 ```
+
+## Quickstart
+
+```python
+from alure_sdk import AlureClient
+
+client = AlureClient(base_url="http://localhost:3000/api/v1")
+result = client.ensure_active(license_key="YOUR-LICENSE-KEY")
+
+if not result.get("valid"):
+    raise SystemExit(f"License invalid: {result.get('reason')}")
+
+print("Enabled modules:", result.get("modules") or [])
+```
+
+## Common Operations
+
+Activate or verify:
+
+```python
+result = client.ensure_active(license_key="ALR-XXXX-YYYY-ZZZZ")
+```
+
+Read enabled modules from stored receipt:
+
+```python
+keys = client.enabled_modules()
+```
+
+Check for updates:
+
+```python
+update = client.check_update(project_id="PROJECT_ID", channel="stable")
+if update.get("update_available"):
+    print(update.get("asset"))
+```
+
+Check and download in one call:
+
+```python
+download = client.check_update_and_download(
+    project_id="PROJECT_ID",
+    channel="stable",
+)
+```
+
+## Storage
+
+By default, the SDK stores receipt and activation metadata in local file storage. You can pass a custom storage implementation if needed.
+
+```python
+from pathlib import Path
+from alure_sdk import AlureClient, FileStorage
+
+client = AlureClient(
+    base_url="http://localhost:3000/api/v1",
+    storage=FileStorage(Path.home() / ".alure-client"),
+)
+```
+
+## Package Publishing
+
+```bash
 python -m pip install --upgrade build twine
 python -m build
 python -m twine upload dist/*
 ```
 
-## Uso rapido
-```python
-from alure_sdk import AlureClient
+## Compatibility
 
-client = AlureClient(base_url="http://localhost:3000/api/v1")
+- Python 3.9+
+- Designed for the Alure API (`/api/v1`)
 
-# Activate license
-activation = client.activate("ALR-XXXXXX-YYYYYY-ZZZZZZ", device_id="device-123")
-print("Activation:", activation.activation_id)
+## Examples
 
-# Verify online
-result = client.verify_online()
-print("Verify online:", result)
-
-# Verify offline (use server public key for signature check)
-offline = client.verify_offline(verify_signature=False)
-print("Verify offline:", offline.valid, offline.reason)
-
-# Check update
-latest = client.check_update(project_id="demo", channel="stable")
-print("Latest version:", latest.get("latest_version"))
-
-# Download asset (token protected)
-asset_id = latest.get("asset", {}).get("asset_id")
-if asset_id:
-    file_path = client.download_asset(asset_id)
-    print("Downloaded:", file_path)
-```
-
-## Receipt signature (opzionale)
-Per la verifica offline con firma, passa la chiave pubblica Ed25519:
-```python
-client = AlureClient(public_key_pem="-----BEGIN PUBLIC KEY-----\n...\n-----END PUBLIC KEY-----")
-offline = client.verify_offline()
-```
-
-## UI attivazione (Tkinter)
-```python
-from alure_sdk import AlureClient
-from alure_sdk.ui import activate_with_ui
-
-client = AlureClient()
-activate_with_ui(client)
-```
+- `examples/simple.py`
